@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>流れ星観測</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root { --bg:#080b14; --panel:#121829; --fg:#d9deea; --dim:#7d869c; --accent:#e8554e; --on:#2f6fd6; }
+  html, body { height:100%; margin:0; }
+  body { display:flex; flex-direction:column; background:var(--bg); color:var(--fg);
+         font-family:system-ui,"Hiragino Sans","Noto Sans JP",sans-serif;
+         padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom); }
+  #dir { font-size:30px; font-weight:700; padding:10px 14px 0; white-space:pre-line; line-height:1.25; }
+  #info { font-size:13px; padding:4px 14px; min-height:2.6em; white-space:pre-line; color:var(--dim); }
+  .row { display:flex; gap:6px; padding:4px 14px 8px; align-items:center; }
+  .row button { flex:1; background:var(--panel); color:var(--fg); border:1px solid #26304f;
+                border-radius:8px; padding:10px 6px; font-size:14px; }
+  .row label { font-size:12px; color:var(--dim); display:flex; align-items:center; gap:4px; }
+  .row input { width:4.5em; background:var(--panel); color:var(--fg); border:1px solid #26304f;
+               border-radius:6px; padding:6px; font-size:14px; }
+  #map { flex:1; min-height:0; background:#0e1424; }
+  #lock { height:25vh; font-size:36px; font-weight:700; border:0; border-radius:0;
+          background:var(--accent); color:#fff; }
+  #lock.on { background:var(--on); }
+  button:focus-visible, input:focus-visible { outline:2px solid #9bbcff; outline-offset:2px; }
+</style>
+</head>
+<body>
+<div id="dir">方位 --°<br>高度角 --°</div>
+<div id="info">計測中</div>
+<div class="row">
+  <button id="gps">現在地を観測地点に</button>
+  <button id="clear">履歴消去</button>
+  <label>偏角<input id="decl" type="number" step="0.1" value="-7.5">°</label>
+</div>
+<div id="map"></div>
+<button id="lock">ロック</button>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const D = Math.PI / 180, R = 6371.0;
+const $ = id => document.getElementById(id);
+
+// ---------- 地図 ----------
+const map = L.map('map', { minZoom: 5, maxZoom: 18 }).setView([37.5, 137.5], 5);
+L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
+  minZoom: 5, maxZoom: 18,
+  attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>'
+}).addTo(map);
+window.addEventListener('resize', () => map.invalidateSize());
+
+// ---------- 状態 ----------
+let observer = null, observerMarker = null;
+let locked = false, curAz = 0, curAlt = 0;
+let fe = 0, fn = 0, fu = 0, hasFirst = false;
+let currentLine = null, meteorMarkers = [], historyPoints = [], maxGroundKm = 0;
+let declEdited = false;
+
+// ---------- 球面幾何(Android版と同じ計算) ----------
+function meteorPoint(lat, lon, azDeg, altDeg, H = 100) {
+  const h = altDeg * D, s = Math.sin(h);
+  const d = -R * s + Math.sqrt(R * R * s * s + 2 * R * H + H * H);   // 視線方向の距離
+  const th = Math.atan2(d * Math.cos(h), R + d * s);                   // 地球中心角
+  const b = azDeg * D, p1 = lat * D, l1 = lon * D;
+  const p2 = Math.asin(Math.sin(p1) * Math.cos(th) + Math.cos(p1) * Math.sin(th) * Math.cos(b));
+  const l2 = l1 + Math.atan2(Math.sin(b) * Math.sin(th) * Math.cos(p1),
+                             Math.cos(th) - Math.sin(p1) * Math.sin(p2));
+  return { lat: p2 / D, lon: ((l2 / D + 540) % 360) - 180, groundKm: R * th, slantKm: d };
+}
+const NAMES = ["北","北北東","北東","東北東","東","東南東","南東","南南東","南","南南西","南西","西南西","西","西北西","北西","北北西"];
+const compass = az => NAMES[Math.floor((az + 11.25) / 22.5) % 16];
+
+// 日本付近の磁気偏角の簡易近似(沖縄≒-5°〜北海道≒-9°)。誤差は±1°程度なので、
+// 気になる場合は国土地理院の値などを「偏角」欄に直接入力してください。
+const declApprox = lat => -(5.0 + 0.25 * (lat - 26));
+
+// ---------- 観測地点 ----------
+function setObserver(ll, center, save = true) {
+  observer = L.latLng(ll.lat, ll.lng);
+  if (observerMarker) map.removeLayer(observerMarker);
+  observerMarker = L.marker(observer).addTo(map).bindTooltip('観測地点');
+  if (!declEdited) $('decl').value = declApprox(observer.lat).toFixed(1);
+  if (center) map.setView(observer, 8);
+  if (save) { try { localStorage.setItem('observer', JSON.stringify([observer.lat, observer.lng])); } catch (e) {} }
+}
+map.on('contextmenu', e => setObserver(e.latlng, false));   // 長押しで設定
+$('decl').addEventListener('input', () => { declEdited = true; });
+$('gps').addEventListener('click', () => {
+  if (!navigator.geolocation) { $('info').textContent = '現在地を取得できません。地図の長押しで設定してください'; return; }
+  navigator.geolocation.getCurrentPosition(
+    p => setObserver({ lat: p.coords.latitude, lng: p.coords.longitude }, true),
+    () => { $('info').textContent = '現在地を取得できません。地図の長押しで設定してください'; },
+    { enableHighAccuracy: true, timeout: 15000 });
+});
+try {
+  const s = JSON.parse(localStorage.getItem('observer') || 'null');
+  if (s) setObserver({ lat: s[0], lng: s[1] }, true, false);
+} catch (e) {}
+
+// ---------- センサー ----------
+// スマホ上端(デバイスY軸)の向きを、W3Cの回転式 Rz(α)Rx(β)Ry(γ) から東・北・上の成分で求める
+function onOri(e) {
+  if (locked || e.alpha == null || e.beta == null) return;
+  const a = e.alpha * D, b = e.beta * D;
+  const ve = -Math.sin(a) * Math.cos(b), vn = Math.cos(a) * Math.cos(b), vu = Math.sin(b);
+  if (!hasFirst) { fe = ve; fn = vn; fu = vu; hasFirst = true; }
+  else { const k = 0.25; fe += k * (ve - fe); fn += k * (vn - fn); fu += k * (vu - fu); } // ベクトルで平滑化
+  const decl = parseFloat($('decl').value) || 0;
+  curAlt = Math.asin(Math.max(-1, Math.min(1, fu))) / D;
+  curAz = ((Math.atan2(fe, fn) / D + decl) % 360 + 360) % 360;
+  $('dir').textContent = `方位 ${curAz.toFixed(1)}° (${compass(curAz)})\n高度角 ${curAlt >= 0 ? '+' : ''}${curAlt.toFixed(1)}°`;
+}
+if ('ondeviceorientationabsolute' in window) {
+  window.addEventListener('deviceorientationabsolute', onOri, true);
+} else {
+  $('info').textContent = 'このブラウザでは絶対方位が取得できません。Android の Chrome で開いてください。';
+}
+if (!window.isSecureContext) $('info').textContent = 'HTTPS で開いてください(センサーが使えません)。';
+
+// ---------- ロック & プロット ----------
+$('lock').addEventListener('click', () => {
+  if (locked) {                       // 解除: 線だけ消してマーカーは残す
+    locked = false;
+    if (currentLine) { map.removeLayer(currentLine); currentLine = null; }
+    $('lock').textContent = 'ロック'; $('lock').classList.remove('on');
+    $('info').textContent = '計測中';
+    return;
+  }
+  if (!observer) { $('info').textContent = '先に観測地点を設定してください(地図を長押し、または現在地ボタン)'; return; }
+  if (curAlt < 1) { $('info').textContent = '高度角が低すぎます(1°以上にしてください)'; return; }
+  locked = true;
+  $('lock').textContent = '解除して再計測'; $('lock').classList.add('on');
+  plotMeteor(curAz, curAlt);
+});
+
+function plotMeteor(az, alt) {
+  const fix = meteorPoint(observer.lat, observer.lng, az, alt, 100);
+  const p = L.latLng(fix.lat, fix.lon);
+  const t = new Date().toLocaleTimeString('ja-JP', { hour12: false });
+  currentLine = L.polyline([observer, p], { color: '#ff6b5e', weight: 4 }).addTo(map);
+  const mk = L.circleMarker(p, { radius: 8, color: '#fff', weight: 2, fillColor: '#e8554e', fillOpacity: 1 })
+    .addTo(map)
+    .bindTooltip(String(meteorMarkers.length + 1), { permanent: true, direction: 'top' })
+    .bindPopup(`${t}<br>方位 ${az.toFixed(1)}° 高度角 ${alt.toFixed(1)}°<br>観測点から ${fix.groundKm.toFixed(0)} km(高度100km仮定)`);
+  meteorMarkers.push(mk);
+  mk.openPopup();
+
+  // 表示範囲は「観測点＋全履歴」に合わせる(近い点でもズームインしない)
+  historyPoints.push(p);
+  maxGroundKm = Math.max(maxGroundKm, fix.groundKm);
+  if (maxGroundKm < 20) map.setView(observer, 10);
+  else map.fitBounds(L.latLngBounds([observer, ...historyPoints]), { padding: [40, 40] });
+
+  $('info').textContent = `ロック中: ${fix.lat.toFixed(4)}, ${fix.lon.toFixed(4)}\n観測点から地表 ${fix.groundKm.toFixed(0)} km / 直線 ${fix.slantKm.toFixed(0)} km`;
+}
+
+$('clear').addEventListener('click', () => {
+  meteorMarkers.forEach(m => map.removeLayer(m));
+  if (currentLine) map.removeLayer(currentLine);
+  meteorMarkers = []; historyPoints = []; currentLine = null; maxGroundKm = 0;
+});
+</script>
+</body>
+</html>
