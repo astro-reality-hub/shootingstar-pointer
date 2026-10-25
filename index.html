@@ -16,17 +16,25 @@
   #dir { font-size:30px; font-weight:700; padding:10px 14px 0; white-space:pre-line; line-height:1.25; }
   #info { font-size:13px; padding:4px 14px; min-height:2.6em; white-space:pre-line; color:var(--dim); }
   .row { display:flex; gap:6px; padding:3px 14px 5px; align-items:center; }
-  .row button { flex:1; background:var(--panel); color:var(--fg); border:1px solid var(--line);
+  .row button, .ptools button { flex:1; background:var(--panel); color:var(--fg); border:1px solid var(--line);
                 border-radius:8px; padding:10px 4px; font-size:13px; }
-  .row button[aria-pressed="true"] { border-color:var(--fg); }
+  .row button[aria-pressed="true"], .ptools button:active { border-color:var(--fg); }
   .row label { font-size:12px; color:var(--dim); display:flex; align-items:center; gap:4px; }
   .row input { background:var(--panel); color:var(--fg); border:1px solid var(--line);
                border-radius:6px; padding:7px; font-size:14px; min-width:0; }
   #region { flex:1; } #decl { width:4.2em; }
   .row input::placeholder { color:var(--dim); }
   #map { flex:1; min-height:0; background:var(--bg); }
-  #lock { height:25vh; font-size:36px; font-weight:700; border:0; border-radius:0;
+  #bottom { height:25vh; display:flex; flex-direction:column; }
+  #lock { flex:1; font-size:36px; font-weight:700; border:0; border-radius:0;
           background:var(--accent); color:#fff; }
+  #panel { display:none; flex:1; flex-direction:column; min-height:0; }
+  #bottom.show-result #lock { display:none; }
+  #bottom.show-result #panel { display:flex; }
+  .ptools { display:flex; gap:6px; padding:6px 14px; }
+  #resultText { flex:1; min-height:0; margin:0 14px 8px; padding:8px; resize:none; white-space:pre;
+                background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:6px;
+                font:12px/1.5 ui-monospace,Menlo,Consolas,monospace; }
   #lock.on { background:var(--on); }
   body.night #lock { color:var(--fg); border-top:1px solid var(--line); }
   button:focus-visible, input:focus-visible { outline:2px solid #9bbcff; outline-offset:2px; }
@@ -37,9 +45,7 @@
   .m-meteor { stroke:#fff; stroke-width:2; fill:#e8554e; fill-opacity:1; }
 
   /* ナイトモード: 黒地に暗い赤の線だけ */
-  body.night .leaflet-tile-pane { filter:grayscale(1) invert(1) brightness(.55); }
-  body.night #map::after { content:""; position:absolute; inset:0; z-index:1000; pointer-events:none;
-                           background:#5a0000; mix-blend-mode:multiply; }
+  body.night .leaflet-tile-pane { filter:invert(1) contrast(1.25) url(#nightTiles); }
   body.night .obs { border-color:#a33; }
   body.night .m-line { stroke:#a22; stroke-width:2; }
   body.night .m-meteor { stroke:#c33; stroke-width:2; fill:none; }
@@ -52,11 +58,17 @@
 </style>
 </head>
 <body>
+<!-- ナイトモードの地図用: 白黒にしてから、他の表示と同じ暗い赤(#8c1f1f)に色付けするフィルター -->
+<svg style="position:absolute;width:0;height:0" aria-hidden="true">
+  <filter id="nightTiles" color-interpolation-filters="sRGB">
+    <feColorMatrix type="matrix" values="0.117 0.393 0.040 0 0  0.026 0.086 0.009 0 0  0.026 0.086 0.009 0 0  0 0 0 1 0"/>
+  </filter>
+</svg>
 <div id="dir">方位 --°<br>高度角 --°</div>
 <div id="info">計測中</div>
 <div class="row">
   <button id="gps" title="現在地を観測地点にする">現在地</button>
-  <button id="csv">テキスト保存</button>
+  <button id="result" aria-pressed="false">観測結果</button>
   <button id="clear">履歴消去</button>
   <button id="night" aria-pressed="false">ナイトモード</button>
 </div>
@@ -65,7 +77,16 @@
   <label>偏角<input id="decl" type="number" step="0.1" value="-7.5">°</label>
 </div>
 <div id="map"></div>
-<button id="lock">ロック</button>
+<div id="bottom">
+  <button id="lock">ロック</button>
+  <div id="panel">
+    <div class="ptools">
+      <button id="copy">履歴コピー</button>
+      <button id="closeResult">閉じる</button>
+    </div>
+    <textarea id="resultText" readonly wrap="off" aria-label="観測結果"></textarea>
+  </div>
+</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
@@ -235,27 +256,48 @@ $('clear').addEventListener('click', () => {
   if (currentLine) map.removeLayer(currentLine);
   meteorMarkers = []; historyPoints = []; currentLine = null; maxGroundKm = 0;
   records = []; store('records', records);
+  if ($('bottom').classList.contains('show-result')) refreshResult();
 });
 
-// ---------- テキスト保存(コンマ区切り) ----------
+// ---------- 観測結果(コンマ区切りテキスト)の表示とコピー ----------
 const HEADER = ['観測地緯度', '観測地経度', '地域名', '番号', '観測時刻', '方位(°)', '方位(16方位)', '高度角(°)',
                 '想定高度(km)', '推定位置緯度', '推定位置経度', '観測地からの地表距離(km)', '直線距離(km)', '偏角補正(°)'];
 const esc = v => { v = String(v); return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
 
-$('csv').addEventListener('click', () => {
-  if (!records.length) { $('info').textContent = '保存するデータがありません。ロックで測定すると記録されます'; return; }
+function resultText() {
+  if (!records.length) return '';
   const rows = records.map(r => [
     r.obsLat.toFixed(6), r.obsLon.toFixed(6), r.region, r.n, r.time,
     r.az.toFixed(1), compass(r.az), r.alt.toFixed(1), 100,
     r.lat.toFixed(6), r.lon.toFixed(6), r.groundKm.toFixed(1), r.slantKm.toFixed(1), r.decl.toFixed(1)]);
-  // 先頭の BOM で、Excel でも日本語が文字化けしない
-  const text = '\uFEFF' + [HEADER, ...rows].map(r => r.map(esc).join(',')).join('\r\n') + '\r\n';
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
-  const t = fmtTime(new Date()).replace(/[-: ]/g, m => m === ' ' ? '_' : '');
-  const a = Object.assign(document.createElement('a'), { href: url, download: `shootingstar_${t}.txt` });
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
-  $('info').textContent = `${records.length}件をテキストファイルに保存しました`;
+  return [HEADER, ...rows].map(r => r.map(esc).join(',')).join('\n');
+}
+function refreshResult() {
+  $('resultText').value = resultText() || 'まだ観測結果がありません。ロックで測定すると記録されます。';
+}
+function showResult(on) {                 // ロックボタンの場所に観測結果を表示/非表示
+  $('bottom').classList.toggle('show-result', on);
+  $('result').setAttribute('aria-pressed', String(on));
+  if (on) refreshResult();
+}
+$('result').addEventListener('click', () => showResult(!$('bottom').classList.contains('show-result')));
+$('closeResult').addEventListener('click', () => showResult(false));
+
+$('copy').addEventListener('click', () => {
+  const text = resultText();
+  if (!text) { $('info').textContent = 'コピーするデータがありません。ロックで測定すると記録されます'; return; }
+  const done = () => {
+    $('info').textContent = `観測結果 ${records.length}件をコピーしました。メールなどに貼り付けできます`;
+    $('copy').textContent = 'コピーしました';
+    setTimeout(() => { $('copy').textContent = '履歴コピー'; }, 1500);
+  };
+  const fallback = () => {                // クリップボードAPIが使えない場合
+    const ta = $('resultText'); ta.focus(); ta.select();
+    try { document.execCommand('copy') ? done() : ($('info').textContent = 'コピーできませんでした。表示された文字を長押しして選択してください'); }
+    catch (e) { $('info').textContent = 'コピーできませんでした。表示された文字を長押しして選択してください'; }
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback);
+  else fallback();
 });
 
 // ---------- ナイトモード ----------
