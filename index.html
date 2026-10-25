@@ -13,7 +13,9 @@
   body { display:flex; flex-direction:column; background:var(--bg); color:var(--fg);
          font-family:system-ui,"Hiragino Sans","Noto Sans JP",sans-serif;
          padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom); }
-  #dir { font-size:30px; font-weight:700; padding:10px 14px 0; white-space:pre-line; line-height:1.25; }
+  #head { display:flex; justify-content:space-between; align-items:flex-end; padding-right:14px; }
+  #dir { font-size:30px; font-weight:700; padding:10px 14px 0; white-space:pre; line-height:1.25; }
+  #credit { flex:none; font-size:11px; color:var(--dim); padding-bottom:4px; white-space:nowrap; }
   #info { font-size:13px; padding:4px 14px; min-height:2.6em; white-space:pre-line; color:var(--dim); }
   .row { display:flex; gap:6px; padding:3px 14px 5px; align-items:center; }
   .row button, .ptools button { flex:1; background:var(--panel); color:var(--fg); border:1px solid var(--line);
@@ -40,13 +42,13 @@
   button:focus-visible, input:focus-visible { outline:2px solid #9bbcff; outline-offset:2px; }
 
   /* 地図上の図形(昼) */
-  .obs { width:14px; height:14px; margin:2px; box-sizing:border-box; border:2px solid #7aa8ff; border-radius:50%; }
+  .obs { width:16px; height:16px; margin:1px; box-sizing:border-box; background:#7aa8ff; border:2px solid #fff; border-radius:50%; }
   .m-line { stroke:#ff6b5e; stroke-width:4; }
   .m-meteor { stroke:#fff; stroke-width:2; fill:#e8554e; fill-opacity:1; }
 
   /* ナイトモード: 黒地に暗い赤の線だけ */
   body.night .leaflet-tile-pane { filter:invert(1) contrast(1.25) url(#nightTiles); }
-  body.night .obs { border-color:#a33; }
+  body.night .obs { background:#b03030; border-color:#000; }
   body.night .m-line { stroke:#a22; stroke-width:2; }
   body.night .m-meteor { stroke:#c33; stroke-width:2; fill:none; }
   body.night .leaflet-popup-content-wrapper, body.night .leaflet-popup-tip,
@@ -64,7 +66,10 @@
     <feColorMatrix type="matrix" values="0.117 0.393 0.040 0 0  0.026 0.086 0.009 0 0  0.026 0.086 0.009 0 0  0 0 0 1 0"/>
   </filter>
 </svg>
-<div id="dir">方位 --°<br>高度角 --°</div>
+<div id="head">
+  <div id="dir">方位 --°<br>高度角 --°</div>
+  <div id="credit">© 天体感測室</div>
+</div>
 <div id="info">計測中</div>
 <div class="row">
   <button id="gps" title="現在地を観測地点にする">現在地</button>
@@ -195,6 +200,7 @@ $('lock').addEventListener('click', () => {
   if (locked) {                       // 解除: 線だけ消してマーカーは残す
     locked = false;
     if (currentLine) { map.removeLayer(currentLine); currentLine = null; }
+    map.closePopup();   // 距離などの吹き出しも消す
     $('lock').textContent = 'ロック'; $('lock').classList.remove('on');
     $('info').textContent = '計測中';
     return;
@@ -307,8 +313,24 @@ function setNight(on) {
   document.querySelector('meta[name="theme-color"]').content = on ? '#000000' : '#080b14';
   store('night', on);
 }
-$('night').addEventListener('click', () => setNight(!document.body.classList.contains('night')));
+// ナイトモード中は全画面にして、ブラウザの明るい枠(アドレスバーなど)を隠す
+const enterFs = () => {
+  const el = document.documentElement;
+  if (!document.fullscreenElement && el.requestFullscreen) el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+};
+const exitFs = () => {
+  if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+};
+$('night').addEventListener('click', () => {
+  const on = !document.body.classList.contains('night');
+  setNight(on);
+  on ? enterFs() : exitFs();
+});
 setNight(!!load('night'));
+// 全画面表示はタップ操作がないと始められないため、ナイトモードのまま開き直したときは最初のタップで全画面にする
+if (document.body.classList.contains('night')) {
+  document.addEventListener('click', () => { if (document.body.classList.contains('night')) enterFs(); }, { once: true, capture: true });
+}
 </script>
 </body>
 </html>
