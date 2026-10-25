@@ -3,35 +3,65 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#080b14">
 <title>流れ星観測</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
-  :root { --bg:#080b14; --panel:#121829; --fg:#d9deea; --dim:#7d869c; --accent:#e8554e; --on:#2f6fd6; }
+  :root { --bg:#080b14; --panel:#121829; --fg:#d9deea; --dim:#7d869c; --line:#26304f; --accent:#e8554e; --on:#2f6fd6; }
+  body.night { --bg:#000; --panel:transparent; --fg:#8c1f1f; --dim:#5c1515; --line:#3d0f0f; --accent:transparent; --on:#140000; }
   html, body { height:100%; margin:0; }
   body { display:flex; flex-direction:column; background:var(--bg); color:var(--fg);
          font-family:system-ui,"Hiragino Sans","Noto Sans JP",sans-serif;
          padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom); }
   #dir { font-size:30px; font-weight:700; padding:10px 14px 0; white-space:pre-line; line-height:1.25; }
   #info { font-size:13px; padding:4px 14px; min-height:2.6em; white-space:pre-line; color:var(--dim); }
-  .row { display:flex; gap:6px; padding:4px 14px 8px; align-items:center; }
-  .row button { flex:1; background:var(--panel); color:var(--fg); border:1px solid #26304f;
-                border-radius:8px; padding:10px 6px; font-size:14px; }
+  .row { display:flex; gap:6px; padding:3px 14px 5px; align-items:center; }
+  .row button { flex:1; background:var(--panel); color:var(--fg); border:1px solid var(--line);
+                border-radius:8px; padding:10px 4px; font-size:13px; }
+  .row button[aria-pressed="true"] { border-color:var(--fg); }
   .row label { font-size:12px; color:var(--dim); display:flex; align-items:center; gap:4px; }
-  .row input { width:4.5em; background:var(--panel); color:var(--fg); border:1px solid #26304f;
-               border-radius:6px; padding:6px; font-size:14px; }
-  #map { flex:1; min-height:0; background:#0e1424; }
+  .row input { background:var(--panel); color:var(--fg); border:1px solid var(--line);
+               border-radius:6px; padding:7px; font-size:14px; min-width:0; }
+  #region { flex:1; } #decl { width:4.2em; }
+  .row input::placeholder { color:var(--dim); }
+  #map { flex:1; min-height:0; background:var(--bg); }
   #lock { height:25vh; font-size:36px; font-weight:700; border:0; border-radius:0;
           background:var(--accent); color:#fff; }
   #lock.on { background:var(--on); }
+  body.night #lock { color:var(--fg); border-top:1px solid var(--line); }
   button:focus-visible, input:focus-visible { outline:2px solid #9bbcff; outline-offset:2px; }
+
+  /* 地図上の図形(昼) */
+  .obs { width:14px; height:14px; margin:2px; box-sizing:border-box; border:2px solid #7aa8ff; border-radius:50%; }
+  .m-line { stroke:#ff6b5e; stroke-width:4; }
+  .m-meteor { stroke:#fff; stroke-width:2; fill:#e8554e; fill-opacity:1; }
+
+  /* ナイトモード: 黒地に暗い赤の線だけ */
+  body.night .leaflet-tile-pane { filter:grayscale(1) invert(1) brightness(.55); }
+  body.night #map::after { content:""; position:absolute; inset:0; z-index:1000; pointer-events:none;
+                           background:#5a0000; mix-blend-mode:multiply; }
+  body.night .obs { border-color:#a33; }
+  body.night .m-line { stroke:#a22; stroke-width:2; }
+  body.night .m-meteor { stroke:#c33; stroke-width:2; fill:none; }
+  body.night .leaflet-popup-content-wrapper, body.night .leaflet-popup-tip,
+  body.night .leaflet-tooltip { background:#000; color:#a33; border:1px solid #511; box-shadow:none; }
+  body.night .leaflet-tooltip-top:before { border-top-color:#511; }
+  body.night .leaflet-bar a, body.night .leaflet-control-attribution
+    { background:#000; color:#a33; border-color:#511; }
+  body.night .leaflet-control-attribution a { color:#733; }
 </style>
 </head>
 <body>
 <div id="dir">方位 --°<br>高度角 --°</div>
 <div id="info">計測中</div>
 <div class="row">
-  <button id="gps">現在地を観測地点に</button>
+  <button id="gps" title="現在地を観測地点にする">現在地</button>
+  <button id="csv">テキスト保存</button>
   <button id="clear">履歴消去</button>
+  <button id="night" aria-pressed="false">ナイトモード</button>
+</div>
+<div class="row">
+  <input id="region" type="text" placeholder="地域名(観測地点を設定すると自動入力)">
   <label>偏角<input id="decl" type="number" step="0.1" value="-7.5">°</label>
 </div>
 <div id="map"></div>
@@ -41,6 +71,10 @@
 <script>
 const D = Math.PI / 180, R = 6371.0;
 const $ = id => document.getElementById(id);
+const pad = n => String(n).padStart(2, '0');
+const fmtTime = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+const store = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+const load = k => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } };
 
 // ---------- 地図 ----------
 const map = L.map('map', { minZoom: 5, maxZoom: 18 }).setView([37.5, 137.5], 5);
@@ -51,17 +85,18 @@ L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
 window.addEventListener('resize', () => map.invalidateSize());
 
 // ---------- 状態 ----------
-let observer = null, observerMarker = null;
+let observer = null, observerMarker = null, regionEdited = false;
 let locked = false, curAz = 0, curAlt = 0;
 let fe = 0, fn = 0, fu = 0, hasFirst = false;
 let currentLine = null, meteorMarkers = [], historyPoints = [], maxGroundKm = 0;
+let records = load('records') || [];
 let declEdited = false;
 
-// ---------- 球面幾何(Android版と同じ計算) ----------
+// ---------- 球面幾何 ----------
 function meteorPoint(lat, lon, azDeg, altDeg, H = 100) {
   const h = altDeg * D, s = Math.sin(h);
-  const d = -R * s + Math.sqrt(R * R * s * s + 2 * R * H + H * H);   // 視線方向の距離
-  const th = Math.atan2(d * Math.cos(h), R + d * s);                   // 地球中心角
+  const d = -R * s + Math.sqrt(R * R * s * s + 2 * R * H + H * H);
+  const th = Math.atan2(d * Math.cos(h), R + d * s);
   const b = azDeg * D, p1 = lat * D, l1 = lon * D;
   const p2 = Math.asin(Math.sin(p1) * Math.cos(th) + Math.cos(p1) * Math.sin(th) * Math.cos(b));
   const l2 = l1 + Math.atan2(Math.sin(b) * Math.sin(th) * Math.cos(p1),
@@ -70,42 +105,58 @@ function meteorPoint(lat, lon, azDeg, altDeg, H = 100) {
 }
 const NAMES = ["北","北北東","北東","東北東","東","東南東","南東","南南東","南","南南西","南西","西南西","西","西北西","北西","北北西"];
 const compass = az => NAMES[Math.floor((az + 11.25) / 22.5) % 16];
-
-// 日本付近の磁気偏角の簡易近似(沖縄≒-5°〜北海道≒-9°)。誤差は±1°程度なので、
-// 気になる場合は国土地理院の値などを「偏角」欄に直接入力してください。
+// 日本付近の磁気偏角の簡易近似(誤差±1°程度)。気になる場合は「偏角」欄に直接入力してください。
 const declApprox = lat => -(5.0 + 0.25 * (lat - 26));
 
-// ---------- 観測地点 ----------
-function setObserver(ll, center, save = true) {
-  observer = L.latLng(ll.lat, ll.lng);
+// ---------- 観測地点・地域名 ----------
+async function lookupRegion(lat, lon) {
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&accept-language=ja&lat=${lat}&lon=${lon}`);
+    const a = (await r.json()).address || {};
+    return (a.state || a.province || '') + (a.city || a.town || a.village || a.municipality || a.county || '');
+  } catch (e) { return ''; }
+}
+const saveObserver = () => observer && store('observer', [observer.lat, observer.lng, $('region').value]);
+
+function setObserver(ll, center, save = true, region = '') {
+  const me = observer = L.latLng(ll.lat, ll.lng);
   if (observerMarker) map.removeLayer(observerMarker);
-  observerMarker = L.marker(observer).addTo(map).bindTooltip('観測地点');
-  if (!declEdited) $('decl').value = declApprox(observer.lat).toFixed(1);
-  if (center) map.setView(observer, 8);
-  if (save) { try { localStorage.setItem('observer', JSON.stringify([observer.lat, observer.lng])); } catch (e) {} }
+  observerMarker = L.marker(me, { icon: L.divIcon({ className: '', html: '<div class="obs"></div>', iconSize: [18, 18] }) })
+    .addTo(map).bindTooltip('観測地点');
+  if (!declEdited) $('decl').value = declApprox(me.lat).toFixed(1);
+  if (center) map.setView(me, 8);
+  regionEdited = false;
+  $('region').value = region;
+  if (!region) {
+    $('region').placeholder = '地域名(取得中…)';
+    lookupRegion(me.lat, me.lng).then(n => {
+      if (observer !== me || regionEdited) return;
+      $('region').value = n;
+      $('region').placeholder = n ? '' : '地域名(取得できません。入力できます)';
+      saveObserver();
+    });
+  }
+  if (save) saveObserver();
 }
 map.on('contextmenu', e => setObserver(e.latlng, false));   // 長押しで設定
 $('decl').addEventListener('input', () => { declEdited = true; });
+$('region').addEventListener('input', () => { regionEdited = true; saveObserver(); });
 $('gps').addEventListener('click', () => {
-  if (!navigator.geolocation) { $('info').textContent = '現在地を取得できません。地図の長押しで設定してください'; return; }
+  const fail = () => { $('info').textContent = '現在地を取得できません。地図の長押しで設定してください'; };
+  if (!navigator.geolocation) return fail();
   navigator.geolocation.getCurrentPosition(
-    p => setObserver({ lat: p.coords.latitude, lng: p.coords.longitude }, true),
-    () => { $('info').textContent = '現在地を取得できません。地図の長押しで設定してください'; },
+    p => setObserver({ lat: p.coords.latitude, lng: p.coords.longitude }, true), fail,
     { enableHighAccuracy: true, timeout: 15000 });
 });
-try {
-  const s = JSON.parse(localStorage.getItem('observer') || 'null');
-  if (s) setObserver({ lat: s[0], lng: s[1] }, true, false);
-} catch (e) {}
 
 // ---------- センサー ----------
-// スマホ上端(デバイスY軸)の向きを、W3Cの回転式 Rz(α)Rx(β)Ry(γ) から東・北・上の成分で求める
+// スマホ上端(デバイスY軸)の向きを、回転式 Rz(α)Rx(β)Ry(γ) から東・北・上の成分で求める
 function onOri(e) {
   if (locked || e.alpha == null || e.beta == null) return;
   const a = e.alpha * D, b = e.beta * D;
   const ve = -Math.sin(a) * Math.cos(b), vn = Math.cos(a) * Math.cos(b), vu = Math.sin(b);
   if (!hasFirst) { fe = ve; fn = vn; fu = vu; hasFirst = true; }
-  else { const k = 0.25; fe += k * (ve - fe); fn += k * (vn - fn); fu += k * (vu - fu); } // ベクトルで平滑化
+  else { const k = 0.25; fe += k * (ve - fe); fn += k * (vn - fn); fu += k * (vu - fu); }
   const decl = parseFloat($('decl').value) || 0;
   curAlt = Math.asin(Math.max(-1, Math.min(1, fu))) / D;
   curAz = ((Math.atan2(fe, fn) / D + decl) % 360 + 360) % 360;
@@ -134,32 +185,88 @@ $('lock').addEventListener('click', () => {
   plotMeteor(curAz, curAlt);
 });
 
-function plotMeteor(az, alt) {
-  const fix = meteorPoint(observer.lat, observer.lng, az, alt, 100);
-  const p = L.latLng(fix.lat, fix.lon);
-  const t = new Date().toLocaleTimeString('ja-JP', { hour12: false });
-  currentLine = L.polyline([observer, p], { color: '#ff6b5e', weight: 4 }).addTo(map);
-  const mk = L.circleMarker(p, { radius: 8, color: '#fff', weight: 2, fillColor: '#e8554e', fillOpacity: 1 })
-    .addTo(map)
-    .bindTooltip(String(meteorMarkers.length + 1), { permanent: true, direction: 'top' })
-    .bindPopup(`${t}<br>方位 ${az.toFixed(1)}° 高度角 ${alt.toFixed(1)}°<br>観測点から ${fix.groundKm.toFixed(0)} km(高度100km仮定)`);
+function addMeteorLayer(r, open) {
+  const p = L.latLng(r.lat, r.lon);
+  const mk = L.circleMarker(p, { radius: 8, className: 'm-meteor' }).addTo(map)
+    .bindTooltip(String(r.n), { permanent: true, direction: 'top' })
+    .bindPopup(`${r.time}<br>方位 ${r.az.toFixed(1)}° 高度角 ${r.alt.toFixed(1)}°<br>観測地から ${r.groundKm.toFixed(0)} km(高度100km仮定)`);
   meteorMarkers.push(mk);
-  mk.openPopup();
-
-  // 表示範囲は「観測点＋全履歴」に合わせる(近い点でもズームインしない)
   historyPoints.push(p);
-  maxGroundKm = Math.max(maxGroundKm, fix.groundKm);
-  if (maxGroundKm < 20) map.setView(observer, 10);
-  else map.fitBounds(L.latLngBounds([observer, ...historyPoints]), { padding: [40, 40] });
-
-  $('info').textContent = `ロック中: ${fix.lat.toFixed(4)}, ${fix.lon.toFixed(4)}\n観測点から地表 ${fix.groundKm.toFixed(0)} km / 直線 ${fix.slantKm.toFixed(0)} km`;
+  maxGroundKm = Math.max(maxGroundKm, r.groundKm);
+  if (open) mk.openPopup();
 }
 
+function plotMeteor(az, alt) {
+  const fix = meteorPoint(observer.lat, observer.lng, az, alt, 100);
+  const r = {
+    n: records.length + 1, time: fmtTime(new Date()),
+    obsLat: observer.lat, obsLon: observer.lng, region: $('region').value.trim(),
+    az, alt, lat: fix.lat, lon: fix.lon, groundKm: fix.groundKm, slantKm: fix.slantKm,
+    decl: parseFloat($('decl').value) || 0
+  };
+  records.push(r); store('records', records);
+  currentLine = L.polyline([observer, L.latLng(r.lat, r.lon)], { className: 'm-line' }).addTo(map);
+  addMeteorLayer(r, true);
+
+  // 表示範囲は「観測点＋全履歴」に合わせる(近い点でもズームインしない)
+  if (maxGroundKm < 20) map.setView(observer, 10);
+  else map.fitBounds(L.latLngBounds([observer, ...historyPoints]), { padding: [40, 40] });
+  $('info').textContent = `#${r.n} ロック中: ${fix.lat.toFixed(4)}, ${fix.lon.toFixed(4)}\n観測地から地表 ${fix.groundKm.toFixed(0)} km / 直線 ${fix.slantKm.toFixed(0)} km`;
+}
+
+// 保存済みの観測地点と履歴を復元
+{
+  const s = load('observer');
+  if (s) setObserver({ lat: s[0], lng: s[1] }, true, false, s[2] || '');
+  records.forEach(r => addMeteorLayer(r, false));
+}
+
+// ---------- 履歴消去(誤タップ防止に2回押し) ----------
+let armed = null;
+const disarm = () => { clearTimeout(armed); armed = null; $('clear').textContent = '履歴消去'; };
 $('clear').addEventListener('click', () => {
+  if (records.length && !armed) {
+    $('clear').textContent = 'もう一度で消去';
+    armed = setTimeout(disarm, 3000);
+    return;
+  }
+  disarm();
   meteorMarkers.forEach(m => map.removeLayer(m));
   if (currentLine) map.removeLayer(currentLine);
   meteorMarkers = []; historyPoints = []; currentLine = null; maxGroundKm = 0;
+  records = []; store('records', records);
 });
+
+// ---------- テキスト保存(コンマ区切り) ----------
+const HEADER = ['観測地緯度', '観測地経度', '地域名', '番号', '観測時刻', '方位(°)', '方位(16方位)', '高度角(°)',
+                '想定高度(km)', '推定位置緯度', '推定位置経度', '観測地からの地表距離(km)', '直線距離(km)', '偏角補正(°)'];
+const esc = v => { v = String(v); return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+
+$('csv').addEventListener('click', () => {
+  if (!records.length) { $('info').textContent = '保存するデータがありません。ロックで測定すると記録されます'; return; }
+  const rows = records.map(r => [
+    r.obsLat.toFixed(6), r.obsLon.toFixed(6), r.region, r.n, r.time,
+    r.az.toFixed(1), compass(r.az), r.alt.toFixed(1), 100,
+    r.lat.toFixed(6), r.lon.toFixed(6), r.groundKm.toFixed(1), r.slantKm.toFixed(1), r.decl.toFixed(1)]);
+  // 先頭の BOM で、Excel でも日本語が文字化けしない
+  const text = '\uFEFF' + [HEADER, ...rows].map(r => r.map(esc).join(',')).join('\r\n') + '\r\n';
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+  const t = fmtTime(new Date()).replace(/[-: ]/g, m => m === ' ' ? '_' : '');
+  const a = Object.assign(document.createElement('a'), { href: url, download: `shootingstar_${t}.txt` });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  $('info').textContent = `${records.length}件をテキストファイルに保存しました`;
+});
+
+// ---------- ナイトモード ----------
+function setNight(on) {
+  document.body.classList.toggle('night', on);
+  $('night').setAttribute('aria-pressed', String(on));
+  document.querySelector('meta[name="theme-color"]').content = on ? '#000000' : '#080b14';
+  store('night', on);
+}
+$('night').addEventListener('click', () => setNight(!document.body.classList.contains('night')));
+setNight(!!load('night'));
 </script>
 </body>
 </html>
