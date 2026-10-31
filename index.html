@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#080b14">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-512.png">
+<link rel="manifest" href="manifest.json">
 <title>流星ポインター</title>
 <meta name="application-name" content="流星ポインター">
 <meta name="apple-mobile-web-app-title" content="流星ポインター">
@@ -242,7 +245,6 @@ $('lock').addEventListener('click', () => {
   if (locked) {                       // 解除: 線だけ消してマーカーは残す
     locked = false;
     if (currentLine) { map.removeLayer(currentLine); currentLine = null; }
-    map.closePopup();   // 距離などの吹き出しも消す
     $('lockLabel').textContent = 'ロック'; $('lock').classList.remove('on');
     $('info').textContent = '計測中';
     return;
@@ -258,12 +260,10 @@ $('lock').addEventListener('click', () => {
 function addMeteorLayer(r, open) {
   const p = L.latLng(r.lat, r.lon);
   const mk = L.circleMarker(p, { radius: 8, className: 'm-meteor' }).addTo(map)
-    .bindTooltip(String(r.n), { permanent: true, direction: 'top' })
-    .bindPopup(`${r.time}<br>方位 ${r.az.toFixed(1)}° 高度角 ${r.alt.toFixed(1)}°<br>観測地から ${fmtKm(r.groundKm)} km(高さ${r.heightKm ?? 100}km仮定)`);
+    .bindTooltip(String(r.n), { permanent: true, direction: 'top' });
   meteorMarkers.push(mk);
   historyPoints.push(p);
   maxGroundKm = Math.max(maxGroundKm, r.groundKm);
-  if (open) mk.openPopup();
 }
 
 function plotMeteor(az, alt) {
@@ -280,7 +280,7 @@ function plotMeteor(az, alt) {
   addMeteorLayer(r, true);
 
   fitAll();   // 表示範囲は「観測点＋全履歴」に合わせる(近い点でもズームインしない)
-  $('info').textContent = `#${r.n} ロック中: ${fix.lat.toFixed(6)}, ${fix.lon.toFixed(6)}\n観測地から地表 ${fmtKm(fix.groundKm)} km / 直線 ${fmtKm(fix.slantKm)} km`;
+  $('info').textContent = `#${r.n} ロック中 ${r.time.slice(11)}(高さ ${H} km仮定)\n観測地から 地表 ${fmtKm(fix.groundKm)} km / 直線 ${fmtKm(fix.slantKm)} km`;
 }
 
 // ---------- 連続計測(1秒ごとに記録。300件または5分で自動OFF) ----------
@@ -294,8 +294,7 @@ function fitAll() {
 }
 function addDot(r) {
   const p = L.latLng(r.lat, r.lon);
-  const mk = L.circleMarker(p, { radius: 3, className: 'm-dot' }).addTo(map)
-    .bindPopup(`#${r.n} ${r.time}<br>方位 ${r.az.toFixed(1)}° 高度角 ${r.alt.toFixed(1)}°<br>観測地から ${fmtKm(r.groundKm)} km(高さ${r.heightKm ?? 100}km仮定)`);
+  const mk = L.circleMarker(p, { radius: 3, className: 'm-dot' }).addTo(map);
   meteorMarkers.push(mk); historyPoints.push(p);
   maxGroundKm = Math.max(maxGroundKm, r.groundKm);
   return p;
