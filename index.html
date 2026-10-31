@@ -4,7 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#080b14">
-<title>流れ星観測</title>
+<title>流星ポインター</title>
+<meta name="application-name" content="流星ポインター">
+<meta name="apple-mobile-web-app-title" content="流星ポインター">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
   :root { --bg:#080b14; --panel:#121829; --fg:#d9deea; --dim:#7d869c; --line:#26304f; --accent:#e8554e; --on:#2f6fd6; }
@@ -24,15 +26,24 @@
   .row label { font-size:12px; color:var(--dim); display:flex; align-items:center; gap:4px; }
   .row input { background:var(--panel); color:var(--fg); border:1px solid var(--line);
                border-radius:6px; padding:7px; font-size:14px; min-width:0; }
-  #region { flex:1; } #decl { width:4.2em; } #height { width:5.6em; }
-  .row .chk { color:var(--fg); font-size:13px; white-space:nowrap; gap:6px; }
-  .row .chk input { width:22px; height:22px; padding:0; margin:0; accent-color:#7aa8ff; }
-  body.night .row .chk input { accent-color:#8c1f1f; }
+  .tight { padding-left:10px; padding-right:10px; gap:4px; }
+  .tight input[type="number"] { box-sizing:border-box; padding:7px 2px; text-align:center; }
+  #region { flex:1; width:0; min-width:0; font-size:13px; }
+  #height { width:52px; } #decl { width:46px; }
+  #hreset { flex:none; width:30px; height:32px; padding:0; font-size:16px; line-height:1; }
+  .row .chk { color:var(--fg); font-size:13px; white-space:nowrap; gap:5px; }
+  .row .chk input { appearance:none; -webkit-appearance:none; flex:none; width:22px; height:22px; padding:0; margin:0;
+                    border:1px solid #5a6a99; border-radius:5px; background:transparent; }
+  .row .chk input:checked { background:#2f6fd6 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 8.5l3.2 3L13 4.5' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/80% no-repeat; border-color:#7aa8ff; }
+  body.night .row .chk input { border-color:#6b1818; background:transparent; }
+  body.night .row .chk input:checked { background:#140000 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 8.5l3.2 3L13 4.5' fill='none' stroke='%238c1f1f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/80% no-repeat; border-color:#8c1f1f; }
+  .row input:disabled, .row button:disabled { opacity:.5; }
   .row input::placeholder { color:var(--dim); }
   #map { flex:1; min-height:0; background:var(--bg); }
   #bottom { height:25vh; display:flex; flex-direction:column; }
-  #lock { flex:1; font-size:36px; font-weight:700; border:0; border-radius:0;
-          background:var(--accent); color:#fff; }
+  #lock { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+          font-size:36px; font-weight:700; border:0; border-radius:0; background:var(--accent); color:#fff; }
+  #lock .app { font-size:15px; font-weight:400; letter-spacing:.15em; opacity:.85; margin-bottom:6px; }
   #panel { display:none; flex:1; flex-direction:column; min-height:0; }
   #bottom.show-result #lock { display:none; }
   #bottom.show-result #panel { display:flex; }
@@ -84,17 +95,16 @@
   <button id="clear">履歴消去</button>
   <button id="night" aria-pressed="false">ナイトモード</button>
 </div>
-<div class="row">
-  <label class="chk"><input id="cont" type="checkbox">連続計測</label>
+<div class="row tight">
   <label>高さ<input id="height" type="number" inputmode="decimal" min="0.001" max="1000" step="any" value="100">km</label>
-  <label>偏角<input id="decl" type="number" step="0.1" value="-7.5">°</label>
-</div>
-<div class="row">
+  <button id="hreset" type="button" title="高さを100kmに戻す" aria-label="高さを100kmに戻す">↺</button>
+  <label class="chk"><input id="cont" type="checkbox">連続計測</label>
   <input id="region" type="text" placeholder="地域名">
+  <label>偏角<input id="decl" type="number" step="0.1" value="-7.5">°</label>
 </div>
 <div id="map"></div>
 <div id="bottom">
-  <button id="lock">計測開始</button>
+  <button id="lock"><span class="app">流星ポインター</span><span id="lockLabel">ロック</span></button>
   <div id="panel">
     <div class="ptools">
       <button id="copy">履歴コピー</button>
@@ -158,7 +168,11 @@ $('height').addEventListener('change', () => {
   const raw = parseFloat($('height').value), h = getHeightKm();
   if (!isFinite(raw) || raw < H_MIN || raw > H_MAX)
     $('info').textContent = `高さは ${H_MIN}〜${H_MAX} km の範囲で入力してください(${h} km にしました)`;
-  $('height').value = h; store('height', h);
+  $('height').value = h;
+});
+$('hreset').addEventListener('click', () => {
+  $('height').value = H_DEF;
+  $('info').textContent = `高さを ${H_DEF} km に戻しました`;
 });
 
 // ---------- 観測地点・地域名 ----------
@@ -181,11 +195,11 @@ function setObserver(ll, center, save = true, region = '') {
   regionEdited = false;
   $('region').value = region;
   if (!region) {
-    $('region').placeholder = '地域名(取得中…)';
+    $('region').placeholder = '取得中…';
     lookupRegion(me.lat, me.lng).then(n => {
       if (observer !== me || regionEdited) return;
       $('region').value = n;
-      $('region').placeholder = n ? '' : '地域名(取得できません。入力できます)';
+      $('region').placeholder = n ? '地域名' : '手入力';
       saveObserver();
     });
   }
@@ -229,7 +243,7 @@ $('lock').addEventListener('click', () => {
     locked = false;
     if (currentLine) { map.removeLayer(currentLine); currentLine = null; }
     map.closePopup();   // 距離などの吹き出しも消す
-    $('lock').textContent = '計測開始'; $('lock').classList.remove('on');
+    $('lockLabel').textContent = 'ロック'; $('lock').classList.remove('on');
     $('info').textContent = '計測中';
     return;
   }
@@ -237,7 +251,7 @@ $('lock').addEventListener('click', () => {
   if ($('cont').checked) { startRun(); return; }   // 連続計測
   if (curAlt < 1) { $('info').textContent = '高度角が低すぎます(1°以上にしてください)'; return; }
   locked = true;
-  $('lock').textContent = '解除して再計測'; $('lock').classList.add('on');
+  $('lockLabel').textContent = '解除して再計測'; $('lock').classList.add('on');
   plotMeteor(curAz, curAlt);
 });
 
@@ -290,8 +304,8 @@ function startRun() {
   running = true; runStart = Date.now(); runId = runStart; runCount = 0;
   trail = L.polyline([], { className: 'm-trail' }).addTo(map);
   meteorMarkers.push(trail);
-  $('lock').textContent = '停止'; $('lock').classList.add('on');
-  $('cont').disabled = true; $('height').disabled = true;
+  $('lockLabel').textContent = '停止'; $('lock').classList.add('on');
+  $('cont').disabled = true; $('height').disabled = true; $('hreset').disabled = true;
   tick();
   runTimer = setInterval(tick, 1000);
 }
@@ -323,8 +337,8 @@ function tick() {
 function stopRun(auto) {
   clearInterval(runTimer); runTimer = null; running = false;
   if (currentLine) { map.removeLayer(currentLine); currentLine = null; }
-  $('lock').textContent = '計測開始'; $('lock').classList.remove('on');
-  $('cont').disabled = false; $('height').disabled = false;
+  $('lockLabel').textContent = 'ロック'; $('lock').classList.remove('on');
+  $('cont').disabled = false; $('height').disabled = false; $('hreset').disabled = false;
   if (auto) $('cont').checked = false;   // 自動OFF: チェックも外す
   fitAll();
   $('info').textContent = `連続計測を${auto ? '自動で' : ''}終了しました(${runCount}件を記録)`;
@@ -342,7 +356,6 @@ function restoreRecords() {
 
 // 保存済みの観測地点と履歴を復元
 {
-  const hs = load('height'); if (hs) $('height').value = hs;
   const s = load('observer');
   if (s) setObserver({ lat: s[0], lng: s[1] }, true, false, s[2] || '');
   restoreRecords();
@@ -380,7 +393,7 @@ function resultText() {
   return [HEADER, ...rows].map(r => r.map(esc).join(',')).join('\n');
 }
 function refreshResult() {
-  $('resultText').value = resultText() || 'まだ観測結果がありません。計測開始で測定すると記録されます。';
+  $('resultText').value = resultText() || 'まだ観測結果がありません。ロックで測定すると記録されます。';
 }
 function showResult(on) {                 // ロックボタンの場所に観測結果を表示/非表示
   $('bottom').classList.toggle('show-result', on);
@@ -392,7 +405,7 @@ $('closeResult').addEventListener('click', () => showResult(false));
 
 $('copy').addEventListener('click', () => {
   const text = resultText();
-  if (!text) { $('info').textContent = 'コピーするデータがありません。計測開始で測定すると記録されます'; return; }
+  if (!text) { $('info').textContent = 'コピーするデータがありません。ロックで測定すると記録されます'; return; }
   const done = () => {
     $('info').textContent = `観測結果 ${records.length}件をコピーしました。メールなどに貼り付けできます`;
     $('copy').textContent = 'コピーしました';
