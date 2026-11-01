@@ -93,7 +93,6 @@
 </div>
 <div id="info">計測中</div>
 <div class="row">
-  <button id="gps" title="現在地を観測地点にする">現在地</button>
   <button id="result" aria-pressed="false">観測結果</button>
   <button id="clear">履歴消去</button>
   <button id="night" aria-pressed="false">ナイトモード</button>
@@ -137,7 +136,7 @@ L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
 window.addEventListener('resize', () => map.invalidateSize());
 
 // ---------- 状態 ----------
-let observer = null, observerMarker = null;
+let observer = null, observerMarker = null, regionEdited = false;
 let locked = false, curAz = 0, curAlt = 0;
 let fe = 0, fn = 0, fu = 0, hasFirst = false;
 let currentLine = null, meteorMarkers = [], historyPoints = [], maxGroundKm = 0;
@@ -179,6 +178,31 @@ $('hreset').addEventListener('click', () => {
 });
 
 // ---------- 観測地点・地域名 ----------
+// 地域名の取得: 国土地理院の逆ジオコーダ(緯度経度→市区町村コード)と、市区町村コード→名称の変換表(muni.js)
+function loadMuni() {
+  return new Promise((resolve, reject) => {
+    if (window.GSI && window.GSI.MUNI_ARRAY) return resolve();
+    window.GSI = window.GSI || {};
+    const el = document.createElement('script');
+    el.src = 'https://maps.gsi.go.jp/js/muni.js';
+    el.onload = () => (window.GSI.MUNI_ARRAY ? resolve() : reject());
+    el.onerror = reject;
+    document.head.appendChild(el);
+  });
+}
+async function lookupRegion(lat, lon) {
+  try {
+    const r = await fetch(`https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=${lat}&lon=${lon}`);
+    const res = (await r.json()).results;
+    if (!res || !res.muniCd) return '';
+    await loadMuni();
+    const t = window.GSI.MUNI_ARRAY, c = String(res.muniCd);
+    const m = t[c] || t[String(parseInt(c, 10))] || t[c.padStart(5, '0')];   // "都道府県コード,都道府県名,市区町村コード,市区町村名"
+    if (!m) return '';
+    const [, pref, , city] = m.split(',');
+    return pref + city.replace(/\s+/g, '');
+  } catch (e) { return ''; }
+}
 const saveObserver = () => observer && store('observer', [observer.lat, observer.lng, $('region').value]);
 
 function setObserver(ll, center, save = true, region = '') {
@@ -188,30 +212,23 @@ function setObserver(ll, center, save = true, region = '') {
     .addTo(map).bindTooltip('観測地点');
   if (!declEdited) $('decl').value = declApprox(me.lat).toFixed(1);
   if (center) map.setView(me, 8);
-  if (region) $('region').value = region;   // 保存済みの地域名を復元(自動取得はしない)
+  regionEdited = false;
+  if (region) $('region').value = region;       // 保存済みの地域名を復元
+  else {                                        // 長押しした場所の地域名を取得して表示
+    $('region').value = '';
+    $('region').placeholder = '取得中…';
+    lookupRegion(me.lat, me.lng).then(n => {
+      if (observer !== me || regionEdited) return;
+      $('region').value = n;
+      $('region').placeholder = n ? '地域名' : '手入力';
+      saveObserver();
+    });
+  }
   if (save) saveObserver();
 }
 map.on('contextmenu', e => setObserver(e.latlng, false));   // 長押しで設定
 $('decl').addEventListener('input', () => { declEdited = true; });
-$('region').addEventListener('input', saveObserver);
-const GEO_MSG = {
-  1: '位置情報の使用が許可されていません(ブラウザと端末の設定を確認してください)',
-  2: '位置を特定できません(電波やGPSの状況を確認してください)',
-  3: '時間内に取得できませんでした(屋外で、もう一度試してください)'
-};
-$('gps').addEventListener('click', () => {
-  if (!navigator.geolocation) { $('info').textContent = 'このブラウザは位置情報に対応していません。地図の長押しで設定してください'; return; }
-  $('info').textContent = '現在地を取得中…';
-  const ok = p => setObserver({ lat: p.coords.latitude, lng: p.coords.longitude }, true);
-  const fail = e => {
-    $('info').textContent = `現在地を取得できません: ${GEO_MSG[e.code] || e.message || '原因不明'}\n地図の長押しでも観測地点を設定できます`;
-  };
-  // まずGPSで試し、だめなら(許可の問題を除き)電波・Wi-Fiによる低精度の取得で再試行する
-  navigator.geolocation.getCurrentPosition(ok, e => {
-    if (e.code === 1) return fail(e);
-    navigator.geolocation.getCurrentPosition(ok, fail, { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 });
-  }, { enableHighAccuracy: true, timeout: 10000 });
-});
+$('region').addEventListener('input', () => { regionEdited = true; saveObserver(); });
 
 // ---------- センサー ----------
 // スマホ上端(デバイスY軸)の向きを、回転式 Rz(α)Rx(β)Ry(γ) から東・北・上の成分で求める
@@ -243,7 +260,7 @@ $('lock').addEventListener('click', () => {
     $('info').textContent = '計測中';
     return;
   }
-  if (!observer) { $('info').textContent = '先に観測地点を設定してください(地図を長押し、または現在地ボタン)'; return; }
+  if (!observer) { $('info').textContent = '先に観測地点を設定してください(地図を長押し)'; return; }
   if ($('cont').checked) { startRun(); return; }   // 連続計測
   if (curAlt < 1) { $('info').textContent = '高度角が低すぎます(1°以上にしてください)'; return; }
   locked = true;
@@ -352,6 +369,7 @@ function restoreRecords() {
   const s = load('observer');
   if (s) setObserver({ lat: s[0], lng: s[1] }, true, false, s[2] || '');
   restoreRecords();
+  if (!observer && $('info').textContent === '計測中') $('info').textContent = '地図を長押しして観測地点を設定してください';
 }
 
 // ---------- 履歴消去(誤タップ防止に2回押し) ----------
