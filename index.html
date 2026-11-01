@@ -48,6 +48,15 @@
   #map { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }   /* iPhoneの長押しメニュー対策 */
   [hidden] { display:none !important; }
   #dbg { font-size:11px; color:var(--dim); }
+  #start { position:fixed; inset:0; z-index:3000; display:flex; align-items:center; justify-content:center; background:var(--bg); }
+  .start-box { width:min(88vw,360px); text-align:center; }
+  .start-title { font-size:26px; font-weight:700; letter-spacing:.12em; margin-bottom:6px; }
+  .start-lead { font-size:14px; color:var(--dim); margin:0 0 20px; }
+  .startbtn { display:flex; flex-direction:column; align-items:center; width:100%; margin-bottom:12px; padding:22px 8px;
+              font-size:22px; font-weight:700; border-radius:12px; border:1px solid var(--line); background:var(--panel); color:var(--fg); }
+  .startbtn small { font-size:12px; font-weight:400; color:var(--dim); margin-top:6px; }
+  .startbtn.last { border-color:var(--fg); }
+  .start-msg { font-size:13px; color:var(--dim); min-height:3.6em; white-space:pre-line; }
   #bottom { height:25vh; display:flex; flex-direction:column; }
   #lock { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
           font-size:36px; font-weight:700; border:0; border-radius:0; background:var(--accent); color:#fff; }
@@ -97,10 +106,7 @@
   <div id="credit">© 天体感測室</div>
 </div>
 <div id="info">計測中</div>
-<div class="row" id="sensorRow" hidden>
-  <button id="sensor" type="button">センサー開始(iPhone)</button>
-  <span id="dbg" hidden></span>
-</div>
+<div class="row" id="sensorRow" hidden><span id="dbg"></span></div>
 <div class="row">
   <button id="result" aria-pressed="false">観測結果</button>
   <button id="clear">履歴消去</button>
@@ -122,6 +128,16 @@
       <button id="closeResult">閉じる</button>
     </div>
     <textarea id="resultText" readonly wrap="off" aria-label="観測結果"></textarea>
+  </div>
+</div>
+
+<div id="start">
+  <div class="start-box">
+    <div class="start-title">流星ポインター</div>
+    <p class="start-lead">お使いの機種を選んで開始してください</p>
+    <button id="startAndroid" class="startbtn" type="button">Android で開始<small>Chrome で開いてください</small></button>
+    <button id="startIos" class="startbtn" type="button">iPhone で開始<small>Safari で開いてください(試験対応)</small></button>
+    <p id="startMsg" class="start-msg"></p>
   </div>
 </div>
 
@@ -255,10 +271,11 @@ function applyOrientation(alphaDeg, betaDeg) {
   curAz = ((Math.atan2(fe, fn) / D + decl) % 360 + 360) % 360;
   $('dir').textContent = `方位 ${curAz.toFixed(1)}° (${compass(curAz)})\n高度角 ${curAlt >= 0 ? '+' : ''}${curAlt.toFixed(1)}°`;
 }
-// ---------- iPhone(Safari)対応 ----------
-// Safari では deviceorientationabsolute が使えない。許可を求めたうえで deviceorientation を使い、
-// コンパスの値(webkitCompassHeading)との差を求めて、Android と同じ「磁北基準の向き」に直す。
-const needsPerm = typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function';
+// ---------- 機種の選択(Android / iPhone) ----------
+// Android(Chrome): deviceorientationabsolute で、磁北基準の向きを直接取れる。
+// iPhone(Safari): deviceorientationabsolute が使えないため、許可を求めたうえで deviceorientation を使い、
+//   コンパスの値(webkitCompassHeading)との差を求めて、Android と同じ「磁北基準の向き」に直す。
+let device = null;   // 'android' か 'ios'
 let iosCal = false, offC = 0, offS = 0, dbgAt = 0;
 function onOriIOS(e) {
   if (locked || e.alpha == null || e.beta == null) return;
@@ -279,29 +296,44 @@ function onOriIOS(e) {
   if (!iosCal) { $('dir').textContent = '方位 --°\n方位を合わせています…'; return; }
   applyOrientation(e.alpha + off, e.beta);
 }
-if (needsPerm) {
-  $('sensorRow').hidden = false;
-  $('info').textContent = '「センサー開始」を押してください(iPhone)';
-  $('sensor').addEventListener('click', async () => {
-    try {
-      const r = await DeviceOrientationEvent.requestPermission();
-      if (r === 'granted') {
-        window.addEventListener('deviceorientation', onOriIOS, true);
-        $('sensor').hidden = true; $('dbg').hidden = false;
-        $('info').textContent = '方位を合わせています。画面を上にして、水平に近く持ってください';
-      } else {
-        $('info').textContent = '動きと向きの許可がありません。Safari のサイトの設定を確認して、ページを開き直してください';
-      }
-    } catch (err) {
-      $('info').textContent = `センサーを開始できません: ${err && err.message ? err.message : '原因不明'}`;
-    }
-  });
-} else if ('ondeviceorientationabsolute' in window) {
+function closeStart() { $('start').hidden = true; store('device', device); }
+$('startAndroid').addEventListener('click', () => {
+  if (!('ondeviceorientationabsolute' in window)) {
+    $('startMsg').textContent = 'このブラウザでは Android 用の方位が取得できません。\nChrome で開くか、iPhone を選んでください。';
+    return;
+  }
+  device = 'android';
   window.addEventListener('deviceorientationabsolute', onOri, true);
-} else {
-  $('info').textContent = 'このブラウザでは方位が取得できません。Android の Chrome か、iPhone の Safari で開いてください。';
+  closeStart();
+});
+$('startIos').addEventListener('click', async () => {
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      const r = await DeviceOrientationEvent.requestPermission();   // タップ操作の中で呼ぶ必要がある
+      if (r !== 'granted') {
+        $('startMsg').textContent = '動きと向きの許可がありません。\nSafari のサイトの設定を確認して、ページを開き直してください。';
+        return;
+      }
+    }
+    device = 'ios';
+    window.addEventListener('deviceorientation', onOriIOS, true);
+    $('sensorRow').hidden = false;
+    closeStart();
+    $('info').textContent = '方位を合わせています。画面を上にして、水平に近く持ってください';
+    setTimeout(() => {
+      if (!iosCal) $('info').textContent = '方位を合わせられません。画面を上にして水平に近く持つか、ページを開き直して機種の選択を確認してください';
+    }, 5000);
+  } catch (err) {
+    $('startMsg').textContent = `センサーを開始できません: ${err && err.message ? err.message : '原因不明'}`;
+  }
+});
+{ const d = load('device');   // 前回選んだ機種を枠で示す
+  if (d === 'android') $('startAndroid').classList.add('last');
+  if (d === 'ios') $('startIos').classList.add('last'); }
+if (!window.isSecureContext) {
+  $('info').textContent = 'HTTPS で開いてください(センサーが使えません)。';
+  $('startMsg').textContent = 'HTTPS で開いてください(センサーが使えません)。';
 }
-if (!window.isSecureContext) $('info').textContent = 'HTTPS で開いてください(センサーが使えません)。';
 
 // ---------- ロック & プロット ----------
 $('lock').addEventListener('click', () => {
@@ -314,7 +346,7 @@ $('lock').addEventListener('click', () => {
     return;
   }
   if (!observer) { $('info').textContent = '先に観測地点を設定してください(地図を長押し)'; return; }
-  if (needsPerm && !iosCal) { $('info').textContent = '方位がまだ合っていません。「センサー開始」を押し、画面を上にして水平に近く持ってください'; return; }
+  if (device === 'ios' && !iosCal) { $('info').textContent = '方位がまだ合っていません。「センサー開始」を押し、画面を上にして水平に近く持ってください'; return; }
   if ($('cont').checked) { startRun(); return; }   // 連続計測
   if (curAlt < 1) { $('info').textContent = '高度角が低すぎます(1°以上にしてください)'; return; }
   locked = true;
