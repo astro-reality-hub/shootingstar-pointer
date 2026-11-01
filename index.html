@@ -137,7 +137,7 @@ L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
 window.addEventListener('resize', () => map.invalidateSize());
 
 // ---------- 状態 ----------
-let observer = null, observerMarker = null, regionEdited = false;
+let observer = null, observerMarker = null;
 let locked = false, curAz = 0, curAlt = 0;
 let fe = 0, fn = 0, fu = 0, hasFirst = false;
 let currentLine = null, meteorMarkers = [], historyPoints = [], maxGroundKm = 0;
@@ -179,13 +179,6 @@ $('hreset').addEventListener('click', () => {
 });
 
 // ---------- 観測地点・地域名 ----------
-async function lookupRegion(lat, lon) {
-  try {
-    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&accept-language=ja&lat=${lat}&lon=${lon}`);
-    const a = (await r.json()).address || {};
-    return (a.state || a.province || '') + (a.city || a.town || a.village || a.municipality || a.county || '');
-  } catch (e) { return ''; }
-}
 const saveObserver = () => observer && store('observer', [observer.lat, observer.lng, $('region').value]);
 
 function setObserver(ll, center, save = true, region = '') {
@@ -195,28 +188,29 @@ function setObserver(ll, center, save = true, region = '') {
     .addTo(map).bindTooltip('観測地点');
   if (!declEdited) $('decl').value = declApprox(me.lat).toFixed(1);
   if (center) map.setView(me, 8);
-  regionEdited = false;
-  $('region').value = region;
-  if (!region) {
-    $('region').placeholder = '取得中…';
-    lookupRegion(me.lat, me.lng).then(n => {
-      if (observer !== me || regionEdited) return;
-      $('region').value = n;
-      $('region').placeholder = n ? '地域名' : '手入力';
-      saveObserver();
-    });
-  }
+  if (region) $('region').value = region;   // 保存済みの地域名を復元(自動取得はしない)
   if (save) saveObserver();
 }
 map.on('contextmenu', e => setObserver(e.latlng, false));   // 長押しで設定
 $('decl').addEventListener('input', () => { declEdited = true; });
-$('region').addEventListener('input', () => { regionEdited = true; saveObserver(); });
+$('region').addEventListener('input', saveObserver);
+const GEO_MSG = {
+  1: '位置情報の使用が許可されていません(ブラウザと端末の設定を確認してください)',
+  2: '位置を特定できません(電波やGPSの状況を確認してください)',
+  3: '時間内に取得できませんでした(屋外で、もう一度試してください)'
+};
 $('gps').addEventListener('click', () => {
-  const fail = () => { $('info').textContent = '現在地を取得できません。地図の長押しで設定してください'; };
-  if (!navigator.geolocation) return fail();
-  navigator.geolocation.getCurrentPosition(
-    p => setObserver({ lat: p.coords.latitude, lng: p.coords.longitude }, true), fail,
-    { enableHighAccuracy: true, timeout: 15000 });
+  if (!navigator.geolocation) { $('info').textContent = 'このブラウザは位置情報に対応していません。地図の長押しで設定してください'; return; }
+  $('info').textContent = '現在地を取得中…';
+  const ok = p => setObserver({ lat: p.coords.latitude, lng: p.coords.longitude }, true);
+  const fail = e => {
+    $('info').textContent = `現在地を取得できません: ${GEO_MSG[e.code] || e.message || '原因不明'}\n地図の長押しでも観測地点を設定できます`;
+  };
+  // まずGPSで試し、だめなら(許可の問題を除き)電波・Wi-Fiによる低精度の取得で再試行する
+  navigator.geolocation.getCurrentPosition(ok, e => {
+    if (e.code === 1) return fail(e);
+    navigator.geolocation.getCurrentPosition(ok, fail, { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 });
+  }, { enableHighAccuracy: true, timeout: 10000 });
 });
 
 // ---------- センサー ----------
