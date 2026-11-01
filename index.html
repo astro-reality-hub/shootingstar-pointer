@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#080b14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-512.png">
 <link rel="manifest" href="manifest.json">
@@ -43,6 +45,9 @@
   .row input:disabled, .row button:disabled { opacity:.5; }
   .row input::placeholder { color:var(--dim); }
   #map { flex:1; min-height:0; background:var(--bg); }
+  #map { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }   /* iPhoneの長押しメニュー対策 */
+  [hidden] { display:none !important; }
+  #dbg { font-size:11px; color:var(--dim); }
   #bottom { height:25vh; display:flex; flex-direction:column; }
   #lock { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
           font-size:36px; font-weight:700; border:0; border-radius:0; background:var(--accent); color:#fff; }
@@ -92,6 +97,10 @@
   <div id="credit">© 天体感測室</div>
 </div>
 <div id="info">計測中</div>
+<div class="row" id="sensorRow" hidden>
+  <button id="sensor" type="button">センサー開始(iPhone)</button>
+  <span id="dbg" hidden></span>
+</div>
 <div class="row">
   <button id="result" aria-pressed="false">観測結果</button>
   <button id="clear">履歴消去</button>
@@ -234,7 +243,10 @@ $('region').addEventListener('input', () => { regionEdited = true; saveObserver(
 // スマホ上端(デバイスY軸)の向きを、回転式 Rz(α)Rx(β)Ry(γ) から東・北・上の成分で求める
 function onOri(e) {
   if (locked || e.alpha == null || e.beta == null) return;
-  const a = e.alpha * D, b = e.beta * D;
+  applyOrientation(e.alpha, e.beta);
+}
+function applyOrientation(alphaDeg, betaDeg) {
+  const a = alphaDeg * D, b = betaDeg * D;
   const ve = -Math.sin(a) * Math.cos(b), vn = Math.cos(a) * Math.cos(b), vu = Math.sin(b);
   if (!hasFirst) { fe = ve; fn = vn; fu = vu; hasFirst = true; }
   else { const k = 0.25; fe += k * (ve - fe); fn += k * (vn - fn); fu += k * (vu - fu); }
@@ -243,10 +255,51 @@ function onOri(e) {
   curAz = ((Math.atan2(fe, fn) / D + decl) % 360 + 360) % 360;
   $('dir').textContent = `方位 ${curAz.toFixed(1)}° (${compass(curAz)})\n高度角 ${curAlt >= 0 ? '+' : ''}${curAlt.toFixed(1)}°`;
 }
-if ('ondeviceorientationabsolute' in window) {
+// ---------- iPhone(Safari)対応 ----------
+// Safari では deviceorientationabsolute が使えない。許可を求めたうえで deviceorientation を使い、
+// コンパスの値(webkitCompassHeading)との差を求めて、Android と同じ「磁北基準の向き」に直す。
+const needsPerm = typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function';
+let iosCal = false, offC = 0, offS = 0, dbgAt = 0;
+function onOriIOS(e) {
+  if (locked || e.alpha == null || e.beta == null) return;
+  const h = e.webkitCompassHeading, acc = e.webkitCompassAccuracy;
+  // 傾きが小さいときだけコンパスの値を信用して、差(補正量)をゆっくり更新する。空へ向けて傾けたら補正量は固定。
+  const usable = h != null && !isNaN(h) && !(acc < 0) && Math.abs(e.beta) < 60 && Math.abs(e.gamma) < 60;
+  if (usable) {
+    const th = ((((360 - h) - e.alpha) % 360) + 360) % 360 * D;
+    if (!iosCal) { offC = Math.cos(th); offS = Math.sin(th); iosCal = true; }
+    else { const k = 0.05; offC += k * (Math.cos(th) - offC); offS += k * (Math.sin(th) - offS); }
+  }
+  const off = Math.atan2(offS, offC) / D;
+  const now = Date.now();
+  if (now - dbgAt > 300) {   // 試験用の診断表示
+    dbgAt = now;
+    $('dbg').textContent = `iPhone試験対応  コンパス ${h == null ? '--' : h.toFixed(0)}° ±${acc == null ? '--' : acc.toFixed(0)}°  補正 ${iosCal ? off.toFixed(0) : '--'}°  β ${e.beta.toFixed(0)}°`;
+  }
+  if (!iosCal) { $('dir').textContent = '方位 --°\n方位を合わせています…'; return; }
+  applyOrientation(e.alpha + off, e.beta);
+}
+if (needsPerm) {
+  $('sensorRow').hidden = false;
+  $('info').textContent = '「センサー開始」を押してください(iPhone)';
+  $('sensor').addEventListener('click', async () => {
+    try {
+      const r = await DeviceOrientationEvent.requestPermission();
+      if (r === 'granted') {
+        window.addEventListener('deviceorientation', onOriIOS, true);
+        $('sensor').hidden = true; $('dbg').hidden = false;
+        $('info').textContent = '方位を合わせています。画面を上にして、水平に近く持ってください';
+      } else {
+        $('info').textContent = '動きと向きの許可がありません。Safari のサイトの設定を確認して、ページを開き直してください';
+      }
+    } catch (err) {
+      $('info').textContent = `センサーを開始できません: ${err && err.message ? err.message : '原因不明'}`;
+    }
+  });
+} else if ('ondeviceorientationabsolute' in window) {
   window.addEventListener('deviceorientationabsolute', onOri, true);
 } else {
-  $('info').textContent = 'このブラウザでは絶対方位が取得できません。Android の Chrome で開いてください。';
+  $('info').textContent = 'このブラウザでは方位が取得できません。Android の Chrome か、iPhone の Safari で開いてください。';
 }
 if (!window.isSecureContext) $('info').textContent = 'HTTPS で開いてください(センサーが使えません)。';
 
@@ -261,6 +314,7 @@ $('lock').addEventListener('click', () => {
     return;
   }
   if (!observer) { $('info').textContent = '先に観測地点を設定してください(地図を長押し)'; return; }
+  if (needsPerm && !iosCal) { $('info').textContent = '方位がまだ合っていません。「センサー開始」を押し、画面を上にして水平に近く持ってください'; return; }
   if ($('cont').checked) { startRun(); return; }   // 連続計測
   if (curAlt < 1) { $('info').textContent = '高度角が低すぎます(1°以上にしてください)'; return; }
   locked = true;
@@ -423,7 +477,7 @@ $('copy').addEventListener('click', () => {
     setTimeout(() => { $('copy').textContent = '履歴コピー'; }, 1500);
   };
   const fallback = () => {                // クリップボードAPIが使えない場合
-    const ta = $('resultText'); ta.focus(); ta.select();
+    const ta = $('resultText'); ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length);
     try { document.execCommand('copy') ? done() : ($('info').textContent = 'コピーできませんでした。表示された文字を長押しして選択してください'); }
     catch (e) { $('info').textContent = 'コピーできませんでした。表示された文字を長押しして選択してください'; }
   };
