@@ -48,6 +48,7 @@
   #map { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }   /* iPhoneの長押しメニュー対策 */
   [hidden] { display:none !important; }
   #dbg { font-size:11px; color:var(--dim); }
+  #kml { flex:1.8; } #closeResult { flex:.8; }
   #start { position:fixed; inset:0; z-index:3000; display:flex; align-items:center; justify-content:center; background:var(--bg); }
   .start-box { width:min(88vw,360px); text-align:center; }
   .start-title { font-size:26px; font-weight:700; letter-spacing:.12em; margin-bottom:6px; }
@@ -125,6 +126,7 @@
   <div id="panel">
     <div class="ptools">
       <button id="copy">履歴コピー</button>
+      <button id="kml" type="button">GoogleEarth出力</button>
       <button id="closeResult">閉じる</button>
     </div>
     <textarea id="resultText" readonly wrap="off" aria-label="観測結果"></textarea>
@@ -515,6 +517,78 @@ $('copy').addEventListener('click', () => {
   };
   if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback);
   else fallback();
+});
+
+// ---------- Google Earth(KML)出力 ----------
+// 観測地点・推定位置(緯度・経度・高さ)をKMLにして保存する。Google Earth で読み込むと、高さのある3D表示で見られる。
+// 高さは「地面からの高さ(relativeToGround)」。単発は★の点と地面までの縦線、連続計測は軌跡と地面までの壁で立体的に表示する。
+const ICON = 'https://maps.google.com/mapfiles/kml/shapes/';
+const KML_STYLES = `
+<Style id="obs"><IconStyle><color>ffffa87a</color><scale>1.1</scale><Icon><href>${ICON}placemark_circle.png</href></Icon></IconStyle></Style>
+<Style id="meteor"><IconStyle><scale>1.3</scale><Icon><href>${ICON}star.png</href></Icon></IconStyle><LineStyle><color>b0ffffff</color><width>1</width></LineStyle></Style>
+<Style id="sight"><LineStyle><color>ff5e6bff</color><width>3</width></LineStyle></Style>
+<Style id="trail"><LineStyle><color>ff47b3ff</color><width>3</width></LineStyle><PolyStyle><color>5547b3ff</color></PolyStyle></Style>
+<Style id="dot"><IconStyle><color>ff47b3ff</color><scale>0.4</scale><Icon><href>${ICON}placemark_circle.png</href></Icon></IconStyle><LabelStyle><scale>0</scale></LabelStyle></Style>
+`;
+const xe = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const altM = r => +((r.heightKm ?? 100) * 1000).toFixed(3);                 // 高さ[m]
+const kc = (lon, lat, alt) => `${(+lon).toFixed(7)},${(+lat).toFixed(7)},${alt}`;
+function kmlDesc(r) {
+  const rows = [
+    `${r.time}`, r.region ? `観測地: ${r.region}` : '',
+    `方位 ${r.az.toFixed(1)}°(${compass(r.az)})  高度角 ${r.alt.toFixed(1)}°`,
+    `高さ ${r.heightKm ?? 100} km(仮定)`,
+    `観測地から 地表 ${fmtKm(r.groundKm)} km / 直線 ${fmtKm(r.slantKm)} km`,
+    `測定種別: ${r.mode || '単発'}`].filter(Boolean);
+  return `<description><![CDATA[${rows.map(xe).join('<br>')}]]></description>`;
+}
+function buildKml() {
+  const pm = (name, desc, style, geom) => `<Placemark><name>${xe(name)}</name>${desc}<styleUrl>#${style}</styleUrl>${geom}</Placemark>\n`;
+  const fol = (name, inner) => `<Folder><name>${xe(name)}</name><open>1</open>\n${inner}</Folder>\n`;
+  const point = (r, name, style, extrude) => pm(name, kmlDesc(r), style,
+    `<Point>${extrude ? '<extrude>1</extrude>' : ''}<altitudeMode>relativeToGround</altitudeMode><coordinates>${kc(r.lon, r.lat, altM(r))}</coordinates></Point>`);
+  const sight = (r, name) => pm(name, '', 'sight',
+    `<LineString><altitudeMode>relativeToGround</altitudeMode><coordinates>${kc(r.obsLon, r.obsLat, 0)} ${kc(r.lon, r.lat, altM(r))}</coordinates></LineString>`);
+
+  const singles = records.filter(r => r.mode !== '連続');
+  const runs = {};
+  records.filter(r => r.mode === '連続').forEach(r => (runs[r.run] = runs[r.run] || []).push(r));
+
+  // 観測地点(同じ場所は1つにまとめる)
+  const seen = new Map();
+  records.forEach(r => { const k = r.obsLat + ',' + r.obsLon; if (!seen.has(k)) seen.set(k, r); });
+  let body = fol('観測地点', [...seen.values()].map(r => pm('観測地点' + (r.region ? ' ' + r.region : ''), '', 'obs',
+    `<Point><altitudeMode>clampToGround</altitudeMode><coordinates>${kc(r.obsLon, r.obsLat, 0)}</coordinates></Point>`)).join(''));
+
+  if (singles.length) {
+    body += fol('ロックした測定', singles.map(r => point(r, '#' + r.n, 'meteor', true) + sight(r, `#${r.n} 観測地からの線`)).join(''));
+  }
+  Object.values(runs).forEach(arr => {
+    let inner = '';
+    if (arr.length > 1) inner += pm('軌跡', '', 'trail',
+      `<LineString><extrude>1</extrude><altitudeMode>relativeToGround</altitudeMode><coordinates>${arr.map(r => kc(r.lon, r.lat, altM(r))).join(' ')}</coordinates></LineString>`);
+    inner += sight(arr[0], '開始時の線') + (arr.length > 1 ? sight(arr[arr.length - 1], '終了時の線') : '');
+    inner += arr.map(r => point(r, '#' + r.n, 'dot', false)).join('');
+    body += fol(`連続計測 ${arr[0].time}(${arr.length}件)`, inner);
+  });
+
+  // 最初に見える位置: 最新の観測地点から、最後の測定の方位を向いて、斜め上から
+  const last = records[records.length - 1];
+  const maxH = Math.max(...records.map(r => altM(r))), maxG = Math.max(...records.map(r => r.groundKm)) * 1000;
+  const range = Math.round(Math.max(3000, maxH * 3, maxG * 2.2));
+  const look = `<LookAt><longitude>${last.obsLon.toFixed(7)}</longitude><latitude>${last.obsLat.toFixed(7)}</latitude><altitude>0</altitude><heading>${last.az.toFixed(1)}</heading><tilt>65</tilt><range>${range}</range><altitudeMode>relativeToGround</altitudeMode></LookAt>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n<name>${xe('流星ポインター ' + fmtTime(new Date()))}</name>\n` +
+    `<description>${xe(`測定 ${records.length}件。高さは、地面からの高さ(仮定値)です。`)}</description>\n${look}\n${KML_STYLES}${body}</Document>\n</kml>\n`;
+}
+$('kml').addEventListener('click', () => {
+  if (!records.length) { $('info').textContent = '出力するデータがありません。ロックで測定すると記録されます'; return; }
+  const blob = new Blob([buildKml()], { type: 'application/vnd.google-earth.kml+xml' });
+  const url = URL.createObjectURL(blob);
+  const t = fmtTime(new Date()).replace(/[-: ]/g, m => m === ' ' ? '_' : '');
+  const a = Object.assign(document.createElement('a'), { href: url, download: `shootingstar_${t}.kml` });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+  $('info').textContent = `${records.length}件をKMLに出力しました。Google Earth の「インポート」から読み込んでください`;
 });
 
 // ---------- ナイトモード ----------
