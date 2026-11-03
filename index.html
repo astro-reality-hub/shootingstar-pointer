@@ -23,11 +23,12 @@
   #head { display:flex; justify-content:space-between; align-items:flex-end; padding-right:14px; }
   #dir { font-size:30px; font-weight:700; padding:10px 14px 0; white-space:pre; line-height:1.25; }
   #credit { flex:none; font-size:11px; color:var(--dim); padding-bottom:4px; white-space:nowrap; }
-  #info { font-size:13px; padding:4px 14px; min-height:2.6em; white-space:pre-line; color:var(--dim); }
+  #info { font-size:13px; padding:4px 14px; min-height:2.6em; white-space:pre-line; color:var(--fg); }
   .row { display:flex; gap:6px; padding:3px 14px 5px; align-items:center; }
-  .row button, .ptools button { flex:1; background:var(--panel); color:var(--fg); border:1px solid var(--line);
+  .row button, .ptools button, .ptools a.btn { flex:1; background:var(--panel); color:var(--fg); border:1px solid var(--line);
                 border-radius:8px; padding:10px 4px; font-size:13px; }
-  .row button[aria-pressed="true"], .ptools button:active { border-color:var(--fg); }
+  .ptools a.btn { display:flex; align-items:center; justify-content:center; text-decoration:none; text-align:center; }
+  .row button[aria-pressed="true"], .ptools button:active, .ptools a.btn:active { border-color:var(--fg); }
   .row label { font-size:12px; color:var(--dim); display:flex; align-items:center; gap:4px; }
   .row input { background:var(--panel); color:var(--fg); border:1px solid var(--line);
                border-radius:6px; padding:7px; font-size:14px; min-width:0; }
@@ -47,6 +48,7 @@
   #map { flex:1; min-height:0; background:var(--bg); }
   #map { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }   /* iPhoneの長押しメニュー対策 */
   [hidden] { display:none !important; }
+  #row1 button { flex:1 1 auto; white-space:nowrap; }
   #dbg { font-size:11px; color:var(--dim); }
   #kml { flex:1.8; } #closeResult { flex:.8; }
   #start { position:fixed; inset:0; z-index:3000; display:flex; align-items:center; justify-content:center; background:var(--bg); }
@@ -108,17 +110,18 @@
 </div>
 <div id="info">計測中</div>
 <div class="row" id="sensorRow" hidden><span id="dbg"></span></div>
-<div class="row">
+<div class="row" id="row1">
   <button id="result" aria-pressed="false">観測結果</button>
   <button id="clear">履歴消去</button>
   <button id="night" aria-pressed="false">ナイトモード</button>
+  <button id="ext" type="button" aria-pressed="false">拡張モード</button>
 </div>
 <div class="row tight">
-  <label>高さ<input id="height" type="number" inputmode="decimal" min="0.001" max="1000" step="any" value="100">km</label>
-  <button id="hreset" type="button" title="高さを100kmに戻す" aria-label="高さを100kmに戻す">↺</button>
-  <label class="chk"><input id="cont" type="checkbox">連続計測</label>
+  <label class="ext-only">高さ<input id="height" type="number" inputmode="decimal" min="0.001" max="1000" step="any" value="100">km</label>
+  <button id="hreset" class="ext-only" type="button" title="高さを100kmに戻す" aria-label="高さを100kmに戻す">↺</button>
+  <label class="chk ext-only"><input id="cont" type="checkbox">連続計測</label>
   <input id="region" type="text" placeholder="地域名">
-  <label>偏角<input id="decl" type="number" step="0.1" value="-7.5">°</label>
+  <label class="ext-only">偏角<input id="decl" type="number" step="0.1" value="-7.5">°</label>
 </div>
 <div id="map"></div>
 <div id="bottom">
@@ -126,7 +129,7 @@
   <div id="panel">
     <div class="ptools">
       <button id="copy">履歴コピー</button>
-      <button id="kml" type="button">GoogleEarth出力</button>
+      <a id="kml" class="btn ext-only" role="button" href="#" download="">GoogleEarth出力</a>
       <button id="closeResult">閉じる</button>
     </div>
     <textarea id="resultText" readonly wrap="off" aria-label="観測結果"></textarea>
@@ -587,17 +590,46 @@ function buildKml() {
     `<description>${xe(`測定 ${records.length}件。高さは、地面からの高さ(仮定値)です。`)}</description>\n${look}\n${KML_STYLES}${body}</Document>\n</kml>\n`;
 }
 const kmlName = () => 'shootingstar_' + fmtTime(new Date()).replace(/[-: ]/g, m => m === ' ' ? '_' : '') + '.kml';
-$('kml').addEventListener('click', () => {
-  if (!records.length) { $('info').textContent = '出力するデータがありません。ロックで測定すると記録されます'; return; }
+// ボタンは本物のリンク(<a download>)。タップの直前に、最新の内容でファイルを用意する。
+// プログラムからクリックを送る方法だと、2回目以降のダウンロードが始まらないことがあったため。
+let kmlUrl = null, kmlFresh = false;
+function prepareKml() {
+  if (!records.length) return false;
+  if (kmlUrl) URL.revokeObjectURL(kmlUrl);   // 前回のファイルは破棄
   // 種類を汎用(octet-stream)にする: KML専用の種類だと、Android が Google Earth アプリに渡そうとして、保存に失敗することがある
-  const blob = new Blob([buildKml()], { type: 'application/octet-stream' });
-  const url = URL.createObjectURL(blob);
-  const a = Object.assign(document.createElement('a'), { href: url, download: kmlName() });
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);   // 保存が終わる前にURLを無効にしない
+  kmlUrl = URL.createObjectURL(new Blob([buildKml()], { type: 'application/octet-stream' }));
+  const a = $('kml'); a.href = kmlUrl; a.download = kmlName();
+  kmlFresh = true;
+  return true;
+}
+$('kml').addEventListener('pointerdown', prepareKml);
+$('kml').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') prepareKml(); });
+$('kml').addEventListener('click', e => {
+  if (!records.length) { e.preventDefault(); $('info').textContent = '出力するデータがありません。ロックで測定すると記録されます'; return; }
+  if (!kmlFresh) { e.preventDefault(); prepareKml(); $('kml').click(); return; }   // 念のため(用意が間に合わなかった場合)
+  kmlFresh = false;
   const nc = records.filter(r => r.mode === '連続').length;
   $('info').textContent = `KMLに出力しました(単発 ${records.length - nc}件 / 連続計測 ${nc}件)。Google Earth の「インポート」から読み込んでください`;
 });
+
+// ---------- 拡張モード(初めての人向けに、上級者向けの機能は普段は隠す) ----------
+function setExt(on) {
+  if (!on && running) {
+    $('info').textContent = '連続計測中は、拡張モードを閉じられません。先に「停止」を押してください';
+    return;
+  }
+  document.querySelectorAll('.ext-only').forEach(el => { el.hidden = !on; });
+  $('ext').setAttribute('aria-pressed', String(on));
+  if (!on) {   // 閉じるときは、標準の設定(高さ100km・単発・偏角は自動)に戻す
+    $('height').value = H_DEF;
+    $('cont').checked = false;
+    declEdited = false;
+    $('decl').value = (observer ? declApprox(observer.lat) : -7.5).toFixed(1);
+  }
+  store('ext', on);
+}
+$('ext').addEventListener('click', () => setExt($('ext').getAttribute('aria-pressed') !== 'true'));
+setExt(!!load('ext'));
 
 // ---------- ナイトモード ----------
 function setNight(on) {
