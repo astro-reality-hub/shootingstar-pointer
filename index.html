@@ -25,9 +25,10 @@
   #credit { flex:none; font-size:11px; color:var(--dim); padding-bottom:4px; white-space:nowrap; }
   #info { font-size:13px; padding:4px 14px; min-height:2.6em; white-space:pre-line; color:var(--fg); }
   .row { display:flex; gap:6px; padding:3px 14px 5px; align-items:center; }
-  .row button, .ptools button { flex:1; background:var(--panel); color:var(--fg); border:1px solid var(--line);
+  .row button, .ptools button, .ptools a.btn { flex:1; background:var(--panel); color:var(--fg); border:1px solid var(--line);
                 border-radius:8px; padding:10px 4px; font-size:13px; }
-  .row button[aria-pressed="true"], .ptools button:active { border-color:var(--fg); }
+  .ptools a.btn { display:flex; align-items:center; justify-content:center; text-decoration:none; text-align:center; }
+  .row button[aria-pressed="true"], .ptools button:active, .ptools a.btn:active { border-color:var(--fg); }
   .row label { font-size:12px; color:var(--dim); display:flex; align-items:center; gap:4px; }
   .row input { background:var(--panel); color:var(--fg); border:1px solid var(--line);
                border-radius:6px; padding:7px; font-size:14px; min-width:0; }
@@ -55,7 +56,7 @@
                   border-bottom:1px solid var(--line); background:transparent; color:var(--fg); }
   #hlist button:last-child { border-bottom:0; }
   body.night #hlist { box-shadow:none; }
-  #kml { flex:1.8; } #closeResult { flex:.8; }
+  #kml { flex:2.6; } #closeResult { flex:.8; }
   #start { position:fixed; inset:0; z-index:3000; display:flex; align-items:center; justify-content:center; background:var(--bg); }
   .start-box { width:min(88vw,360px); text-align:center; }
   .start-title { font-size:26px; font-weight:700; letter-spacing:.12em; margin-bottom:6px; }
@@ -134,7 +135,7 @@
   <div id="panel">
     <div class="ptools">
       <button id="copy">履歴コピー</button>
-      <button id="kml" class="ext-only" type="button">GoogleEarth出力</button>
+      <a id="kml" class="btn ext-only" role="button" href="#" download="">GoogleEarth出力（長押し）</a>
       <button id="closeResult">閉じる</button>
     </div>
     <textarea id="resultText" readonly wrap="off" aria-label="観測結果"></textarea>
@@ -601,20 +602,26 @@ function buildKml() {
     `<description>${xe(`測定 ${records.length}件。高さは、地面からの高さ(仮定値)です。`)}</description>\n${look}\n${KML_STYLES}${body}</Document>\n</kml>\n`;
 }
 const kmlName = () => 'shootingstar_' + fmtTime(new Date()).replace(/[-: ]/g, m => m === ' ' ? '_' : '') + '.kml';
-function downloadKml() {
+// ボタンは本物のリンク(<a download>)。タップの直前に、最新の内容でファイルを用意する。
+// 長押しして出るメニューの「リンクをダウンロード」は、ブラウザ自身が保存するので、2回目以降も保存できる。
+let kmlUrl = null, kmlFresh = false;
+function prepareKml() {
+  if (!records.length) return false;
+  if (kmlUrl) URL.revokeObjectURL(kmlUrl);   // 前回のファイルは破棄
   // 種類を汎用(octet-stream)にする: KML専用の種類だと、Android が Google Earth アプリに渡そうとして、保存に失敗することがある
-  const url = URL.createObjectURL(new Blob([buildKml()], { type: 'application/octet-stream' }));
-  const a = Object.assign(document.createElement('a'), { href: url, download: kmlName() });
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);   // 保存が終わる前にURLを無効にしない
+  kmlUrl = URL.createObjectURL(new Blob([buildKml()], { type: 'application/octet-stream' }));
+  const a = $('kml'); a.href = kmlUrl; a.download = kmlName();
+  kmlFresh = true;
+  return true;
 }
-$('kml').addEventListener('click', () => {
-  if (!records.length) { $('info').textContent = '出力するデータがありません。ロックで測定すると記録されます'; return; }
+$('kml').addEventListener('pointerdown', prepareKml);
+$('kml').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') prepareKml(); });
+$('kml').addEventListener('click', e => {
+  if (!records.length) { e.preventDefault(); $('info').textContent = '出力するデータがありません。ロックで測定すると記録されます'; return; }
+  if (!kmlFresh) { e.preventDefault(); prepareKml(); $('kml').click(); return; }   // 念のため(用意が間に合わなかった場合)
+  kmlFresh = false;
   const nc = records.filter(r => r.mode === '連続').length;
   $('info').textContent = `KMLに出力しました(単発 ${records.length - nc}件 / 連続計測 ${nc}件)。Google Earth の「インポート」から読み込んでください`;
-  // 押した直後ではなく、ほんの少し間をおいてから保存を始める。
-  // Chrome(Android)は、押した直後の2回目以降のダウンロードを止めることがあるため。iPhone は間をおかない。
-  setTimeout(downloadKml, device === 'ios' ? 0 : 300);
 });
 
 // ---------- 高さの候補(入力欄をタップすると表示。選ぶとその高さになる) ----------
