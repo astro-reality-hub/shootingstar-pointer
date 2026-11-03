@@ -582,12 +582,13 @@ function buildKml() {
 }
 $('kml').addEventListener('click', () => {
   if (!records.length) { $('info').textContent = '出力するデータがありません。ロックで測定すると記録されます'; return; }
-  const blob = new Blob([buildKml()], { type: 'application/vnd.google-earth.kml+xml' });
+  // 種類を汎用(octet-stream)にする: KML専用の種類だと、Android が Google Earth アプリに渡そうとして、保存に失敗することがある
+  const blob = new Blob([buildKml()], { type: 'application/octet-stream' });
   const url = URL.createObjectURL(blob);
   const t = fmtTime(new Date()).replace(/[-: ]/g, m => m === ' ' ? '_' : '');
   const a = Object.assign(document.createElement('a'), { href: url, download: `shootingstar_${t}.kml` });
   document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 3000);
+  setTimeout(() => URL.revokeObjectURL(url), 60000);   // 保存が終わる前にURLを無効にしない
   $('info').textContent = `${records.length}件をKMLに出力しました。Google Earth の「インポート」から読み込んでください`;
 });
 
