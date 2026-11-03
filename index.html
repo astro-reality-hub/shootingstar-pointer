@@ -48,7 +48,7 @@
   #map { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }   /* iPhoneの長押しメニュー対策 */
   [hidden] { display:none !important; }
   #dbg { font-size:11px; color:var(--dim); }
-  #kml { flex:1.8; } #kmlShare { flex:.8; } #closeResult { flex:.8; }
+  #kml { flex:1.8; } #closeResult { flex:.8; }
   #start { position:fixed; inset:0; z-index:3000; display:flex; align-items:center; justify-content:center; background:var(--bg); }
   .start-box { width:min(88vw,360px); text-align:center; }
   .start-title { font-size:26px; font-weight:700; letter-spacing:.12em; margin-bottom:6px; }
@@ -127,7 +127,6 @@
     <div class="ptools">
       <button id="copy">履歴コピー</button>
       <button id="kml" type="button">GoogleEarth出力</button>
-      <button id="kmlShare" type="button">共有</button>
       <button id="closeResult">閉じる</button>
     </div>
     <textarea id="resultText" readonly wrap="off" aria-label="観測結果"></textarea>
@@ -139,7 +138,7 @@
     <div class="start-title">流星ポインター</div>
     <p class="start-lead">お使いの機種を選んで開始してください</p>
     <button id="startAndroid" class="startbtn" type="button">Android で開始<small>Chrome で開いてください</small></button>
-    <button id="startIos" class="startbtn" type="button">iPhone で開始<small>Safari で開いてください(試験対応)</small></button>
+    <button id="startIos" class="startbtn" type="button">iPhone で開始<small>Safari で開いてください</small></button>
     <p id="startMsg" class="start-msg"></p>
   </div>
 </div>
@@ -294,7 +293,7 @@ function onOriIOS(e) {
   const now = Date.now();
   if (now - dbgAt > 300) {   // 試験用の診断表示
     dbgAt = now;
-    $('dbg').textContent = `iPhone試験対応  コンパス ${h == null ? '--' : h.toFixed(0)}° ±${acc == null ? '--' : acc.toFixed(0)}°  補正 ${iosCal ? off.toFixed(0) : '--'}°  β ${e.beta.toFixed(0)}°`;
+    $('dbg').textContent = `iPhone  コンパス ${h == null ? '--' : h.toFixed(0)}° ±${acc == null ? '--' : acc.toFixed(0)}°  補正 ${iosCal ? off.toFixed(0) : '--'}°  β ${e.beta.toFixed(0)}°`;
   }
   if (!iosCal) { $('dir').textContent = '方位 --°\n方位を合わせています…'; return; }
   applyOrientation(e.alpha + off, e.beta);
@@ -528,8 +527,8 @@ const KML_STYLES = `
 <Style id="obs"><IconStyle><color>ffffa87a</color><scale>1.1</scale><Icon><href>${ICON}placemark_circle.png</href></Icon></IconStyle></Style>
 <Style id="meteor"><IconStyle><scale>1.3</scale><Icon><href>${ICON}star.png</href></Icon></IconStyle><LineStyle><color>b0ffffff</color><width>1</width></LineStyle></Style>
 <Style id="sight"><LineStyle><color>ff5e6bff</color><width>3</width></LineStyle></Style>
-<Style id="trail"><LineStyle><color>ff47b3ff</color><width>3</width></LineStyle><PolyStyle><color>5547b3ff</color></PolyStyle></Style>
-<Style id="dot"><IconStyle><color>ff47b3ff</color><scale>0.4</scale><Icon><href>${ICON}placemark_circle.png</href></Icon></IconStyle><LabelStyle><scale>0</scale></LabelStyle></Style>
+<Style id="trail"><LineStyle><color>ff47b3ff</color><width>5</width></LineStyle><PolyStyle><color>9947b3ff</color></PolyStyle></Style>
+<Style id="dot"><IconStyle><color>ff47b3ff</color><scale>0.7</scale><Icon><href>${ICON}placemark_circle.png</href></Icon></IconStyle><LabelStyle><scale>0</scale></LabelStyle></Style>
 `;
 const xe = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const altM = r => +((r.heightKm ?? 100) * 1000).toFixed(3);                 // 高さ[m]
@@ -568,7 +567,9 @@ function buildKml() {
     let inner = '';
     if (arr.length > 1) inner += pm('軌跡', '', 'trail',
       `<LineString><extrude>1</extrude><altitudeMode>relativeToGround</altitudeMode><coordinates>${arr.map(r => kc(r.lon, r.lat, altM(r))).join(' ')}</coordinates></LineString>`);
-    inner += sight(arr[0], '開始時の線') + (arr.length > 1 ? sight(arr[arr.length - 1], '終了時の線') : '');
+    // 開始・終了は★(地面までの縦線つき)と観測地からの線で示す。間の1秒ごとの点は、小さな丸
+    inner += point(arr[0], `開始 #${arr[0].n}`, 'meteor', true) + sight(arr[0], '開始時の線');
+    if (arr.length > 1) inner += point(arr[arr.length - 1], `終了 #${arr[arr.length - 1].n}`, 'meteor', true) + sight(arr[arr.length - 1], '終了時の線');
     inner += arr.map(r => point(r, '#' + r.n, 'dot', false)).join('');
     body += fol(`連続計測 ${arr[0].time}(${arr.length}件)`, inner);
   });
@@ -590,26 +591,8 @@ $('kml').addEventListener('click', () => {
   const a = Object.assign(document.createElement('a'), { href: url, download: kmlName() });
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60000);   // 保存が終わる前にURLを無効にしない
-  $('info').textContent = `${records.length}件をKMLに出力しました。Google Earth の「インポート」から読み込んでください`;
-});
-
-// 共有メニュー経由の出力: ブラウザのダウンロード機能を使わず、Googleドライブ・ファイル・メールなどへ直接渡す
-if (!(navigator.share && navigator.canShare)) $('kmlShare').hidden = true;
-$('kmlShare').addEventListener('click', async () => {
-  if (!records.length) { $('info').textContent = '出力するデータがありません。ロックで測定すると記録されます'; return; }
-  const text = buildKml(), name = kmlName();
-  for (const type of ['application/vnd.google-earth.kml+xml', 'text/plain']) {   // 共有できる種類を順に試す
-    const file = new File([text], name, { type });
-    if (!navigator.canShare({ files: [file] })) continue;
-    try {
-      await navigator.share({ files: [file], title: '流星ポインター' });
-      $('info').textContent = `${records.length}件のKMLを共有メニューへ渡しました`;
-    } catch (e) {
-      if (e.name !== 'AbortError') $('info').textContent = `共有できませんでした: ${e.message || e.name}`;
-    }
-    return;
-  }
-  $('info').textContent = 'この端末のブラウザは、ファイルの共有に対応していません';
+  const nc = records.filter(r => r.mode === '連続').length;
+  $('info').textContent = `KMLに出力しました(単発 ${records.length - nc}件 / 連続計測 ${nc}件)。Google Earth の「インポート」から読み込んでください`;
 });
 
 // ---------- ナイトモード ----------
