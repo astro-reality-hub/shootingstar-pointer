@@ -593,11 +593,10 @@ $('kml').addEventListener('click', () => {
   const blob = new Blob([buildKml()], { type: 'application/octet-stream' });
   const url = URL.createObjectURL(blob);
   const a = Object.assign(document.createElement('a'), { href: url, download: kmlName() });
-  document.body.appendChild(a); a.click(); a.remove();   // ダウンロード
-  window.open('https://earth.google.com/web/', '_blank', 'noopener');   // 続けて Google Earth を開く(ファイルの読み込みは Earth 側の操作)
+  document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60000);   // 保存が終わる前にURLを無効にしない
   const nc = records.filter(r => r.mode === '連続').length;
-  $('info').textContent = `KMLに出力しました(単発 ${records.length - nc}件 / 連続計測 ${nc}件)。Google Earth を開きます。「インポート」から、保存したファイルを読み込んでください`;
+  $('info').textContent = `KMLに出力しました(単発 ${records.length - nc}件 / 連続計測 ${nc}件)。Google Earth の「インポート」から読み込んでください`;
 });
 
 // ---------- ナイトモード ----------
