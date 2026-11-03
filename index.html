@@ -527,7 +527,8 @@ const KML_STYLES = `
 <Style id="obs"><IconStyle><color>ffffa87a</color><scale>1.1</scale><Icon><href>${ICON}placemark_circle.png</href></Icon></IconStyle></Style>
 <Style id="meteor"><IconStyle><scale>1.3</scale><Icon><href>${ICON}star.png</href></Icon></IconStyle><LineStyle><color>b0ffffff</color><width>1</width></LineStyle></Style>
 <Style id="sight"><LineStyle><color>ff5e6bff</color><width>3</width></LineStyle></Style>
-<Style id="trail"><LineStyle><color>ff47b3ff</color><width>5</width></LineStyle><PolyStyle><color>9947b3ff</color></PolyStyle></Style>
+<Style id="trail"><LineStyle><color>ff47b3ff</color><width>4</width></LineStyle></Style>
+<Style id="drop"><LineStyle><color>b047b3ff</color><width>1</width></LineStyle><PolyStyle><fill>0</fill></PolyStyle></Style>
 <Style id="dot"><IconStyle><color>ff47b3ff</color><scale>0.7</scale><Icon><href>${ICON}placemark_circle.png</href></Icon></IconStyle><LabelStyle><scale>0</scale></LabelStyle></Style>
 `;
 const xe = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -565,8 +566,11 @@ function buildKml() {
   }
   Object.values(runs).forEach(arr => {
     let inner = '';
-    if (arr.length > 1) inner += pm('軌跡', '', 'trail',
-      `<LineString><extrude>1</extrude><altitudeMode>relativeToGround</altitudeMode><coordinates>${arr.map(r => kc(r.lon, r.lat, altM(r))).join(' ')}</coordinates></LineString>`);
+    if (arr.length > 1) {
+      const co = arr.map(r => kc(r.lon, r.lat, altM(r))).join(' ');
+      inner += pm('軌跡', '', 'trail', `<LineString><altitudeMode>relativeToGround</altitudeMode><coordinates>${co}</coordinates></LineString>`);
+      inner += pm('軌跡から地面への線', '', 'drop', `<LineString><extrude>1</extrude><altitudeMode>relativeToGround</altitudeMode><coordinates>${co}</coordinates></LineString>`);
+    }
     // 開始・終了は★(地面までの縦線つき)と観測地からの線で示す。間の1秒ごとの点は、小さな丸
     inner += point(arr[0], `開始 #${arr[0].n}`, 'meteor', true) + sight(arr[0], '開始時の線');
     if (arr.length > 1) inner += point(arr[arr.length - 1], `終了 #${arr[arr.length - 1].n}`, 'meteor', true) + sight(arr[arr.length - 1], '終了時の線');
@@ -589,10 +593,11 @@ $('kml').addEventListener('click', () => {
   const blob = new Blob([buildKml()], { type: 'application/octet-stream' });
   const url = URL.createObjectURL(blob);
   const a = Object.assign(document.createElement('a'), { href: url, download: kmlName() });
-  document.body.appendChild(a); a.click(); a.remove();
+  document.body.appendChild(a); a.click(); a.remove();   // ダウンロード
+  window.open('https://earth.google.com/web/', '_blank', 'noopener');   // 続けて Google Earth を開く(ファイルの読み込みは Earth 側の操作)
   setTimeout(() => URL.revokeObjectURL(url), 60000);   // 保存が終わる前にURLを無効にしない
   const nc = records.filter(r => r.mode === '連続').length;
-  $('info').textContent = `KMLに出力しました(単発 ${records.length - nc}件 / 連続計測 ${nc}件)。Google Earth の「インポート」から読み込んでください`;
+  $('info').textContent = `KMLに出力しました(単発 ${records.length - nc}件 / 連続計測 ${nc}件)。Google Earth を開きます。「インポート」から、保存したファイルを読み込んでください`;
 });
 
 // ---------- ナイトモード ----------
