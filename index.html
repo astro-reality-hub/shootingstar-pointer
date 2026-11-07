@@ -35,7 +35,7 @@
   .tight { padding-left:10px; padding-right:10px; gap:4px; }
   .tight input[type="number"] { box-sizing:border-box; padding:7px 2px; text-align:center; }
   #region { flex:1; width:0; min-width:0; font-size:13px; }
-  #height { width:52px; } #decl { width:46px; }
+  #height { width:62px; font-size:13px; } #decl { width:46px; }
   #hreset { flex:none; width:30px; height:32px; padding:0; font-size:16px; line-height:1; }
   .row .chk { color:var(--fg); font-size:13px; white-space:nowrap; gap:5px; }
   .row .chk input { appearance:none; -webkit-appearance:none; flex:none; width:22px; height:22px; padding:0; margin:0;
@@ -123,7 +123,7 @@
   <button id="ext" type="button" aria-pressed="false">拡張モード</button>
 </div>
 <div class="row tight">
-  <label class="ext-only">高さ<input id="height" type="number" inputmode="decimal" min="0.001" max="1000" step="any" value="100">km</label>
+  <label class="ext-only">高さ<input id="height" type="number" inputmode="decimal" min="0.001" max="1000000" step="any" value="100">km</label>
   <button id="hreset" class="ext-only" type="button" title="高さを100kmに戻す" aria-label="高さを100kmに戻す">↺</button>
   <label class="chk ext-only"><input id="cont" type="checkbox">連続計測</label>
   <input id="region" type="text" placeholder="地域名">
@@ -146,6 +146,7 @@
   <button type="button" data-km="10">飛行機 10km</button>
   <button type="button" data-km="100">流星 100km</button>
   <button type="button" data-km="400">ISS 400km</button>
+  <button type="button" data-km="380000">月 380000km</button>
 </div>
 
 <div id="start">
@@ -203,7 +204,7 @@ const compass = az => NAMES[Math.floor((az + 11.25) / 22.5) % 16];
 const declApprox = lat => -(5.0 + 0.25 * (lat - 26));
 
 // ---------- 高さ(流れ星が流れた高度の仮定) ----------
-const H_MIN = 0.001, H_MAX = 1000, H_DEF = 100;
+const H_MIN = 0.001, H_MAX = 1000000, H_DEF = 100;
 function getHeightKm() {
   const v = parseFloat($('height').value);
   return isFinite(v) ? Math.min(H_MAX, Math.max(H_MIN, v)) : H_DEF;
@@ -404,7 +405,13 @@ let running = false, runTimer = null, runStart = 0, runCount = 0, runId = 0, tra
 function fitAll() {
   if (!observer || !historyPoints.length) return;
   if (maxGroundKm < 20) map.setView(observer, 10);
-  else map.fitBounds(L.latLngBounds([observer, ...historyPoints]), { padding: [40, 40] });
+  else {
+    const b = L.latLngBounds([observer, ...historyPoints]);
+    map.setMinZoom(1);                                              // いったん縮小できるようにして、必要な倍率を調べる
+    const z = map.getBoundsZoom(b, false, L.point(80, 80));
+    map.setMinZoom(Math.min(5, Math.max(1, Math.floor(z))));        // 日本の地図が出る倍率(5)より引くのは、遠い点があるときだけ
+    map.fitBounds(b, { padding: [40, 40] });
+  }
 }
 function addDot(r) {
   const p = L.latLng(r.lat, r.lon);
@@ -490,6 +497,7 @@ $('clear').addEventListener('click', () => {
   if (currentLine) map.removeLayer(currentLine);
   meteorMarkers = []; historyPoints = []; currentLine = null; maxGroundKm = 0;
   records = []; store('records', records);
+  map.setMinZoom(5);   // 履歴を消したら、縮小の制限を元に戻す
   if ($('bottom').classList.contains('show-result')) refreshResult();
 });
 
@@ -596,7 +604,7 @@ function buildKml() {
   // 最初に見える位置: 最新の観測地点から、最後の測定の方位を向いて、斜め上から
   const last = records[records.length - 1];
   const maxH = Math.max(...records.map(r => altM(r))), maxG = Math.max(...records.map(r => r.groundKm)) * 1000;
-  const range = Math.round(Math.max(3000, maxH * 3, maxG * 2.2));
+  const range = Math.round(Math.min(4e7, Math.max(3000, maxH * 3, maxG * 2.2)));   // 月(38万km)でも、最初の視点は地球全体が見える程度に
   const look = `<LookAt><longitude>${last.obsLon.toFixed(7)}</longitude><latitude>${last.obsLat.toFixed(7)}</latitude><altitude>0</altitude><heading>${last.az.toFixed(1)}</heading><tilt>65</tilt><range>${range}</range><altitudeMode>relativeToGround</altitudeMode></LookAt>`;
   return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n<name>${xe('流星ポインター ' + fmtTime(new Date()))}</name>\n` +
     `<description>${xe(`測定 ${records.length}件。高さは、地面からの高さ(仮定値)です。`)}</description>\n${look}\n${KML_STYLES}${body}</Document>\n</kml>\n`;
