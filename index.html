@@ -391,7 +391,7 @@ function plotMeteor(az, alt) {
     decl: parseFloat($('decl').value) || 0, mode: '単発', heightKm: H
   };
   records.push(r); store('records', records);
-  currentLine = L.polyline([observer, L.latLng(r.lat, r.lon)], { className: 'm-line' }).addTo(map);
+  if (!isFar(L.latLng(r.lat, r.lon))) currentLine = L.polyline([observer, L.latLng(r.lat, r.lon)], { className: 'm-line' }).addTo(map);   // 遠いときは線を引かない
   addMeteorLayer(r, true);
 
   fitAll();   // 表示範囲は「観測点＋全履歴」に合わせる(近い点でもズームインしない)
@@ -405,13 +405,15 @@ let running = false, runTimer = null, runStart = 0, runCount = 0, runId = 0, tra
 function fitAll() {
   if (!observer || !historyPoints.length) return;
   if (maxGroundKm < 20) map.setView(observer, 10);
-  else {
-    const b = L.latLngBounds([observer, ...historyPoints]);
-    map.setMinZoom(1);                                              // いったん縮小できるようにして、必要な倍率を調べる
-    const z = map.getBoundsZoom(b, false, L.point(80, 80));
-    map.setMinZoom(Math.min(5, Math.max(1, Math.floor(z))));        // 日本の地図が出る倍率(5)より引くのは、遠い点があるときだけ
-    map.fitBounds(b, { padding: [40, 40] });
-  }
+  else if (isFar(...historyPoints)) map.setView(historyPoints[historyPoints.length - 1], 5);   // 遠いとき: 最新の推定位置を中心に、地図が出る最小の倍率で表示
+  else map.fitBounds(L.latLngBounds([observer, ...historyPoints]), { padding: [40, 40] });
+}
+// 観測地点と点(群)が、地図の絵が出る最小の倍率(5)でも1画面に収まらないほど遠いか
+function isFar(...pts) {
+  map.setMinZoom(1);                                                // いったん縮小できるようにして、収まる倍率を調べる
+  const z = map.getBoundsZoom(L.latLngBounds([observer, ...pts]), false, L.point(80, 80));
+  map.setMinZoom(5);
+  return z < 5;
 }
 function addDot(r) {
   const p = L.latLng(r.lat, r.lon);
@@ -447,10 +449,15 @@ function tick() {
   };
   records.push(r); store('records', records); runCount++;
   const p = addDot(r);
-  trail.addLatLng(p);
-  if (currentLine) currentLine.setLatLngs([observer, p]);
-  else currentLine = L.polyline([observer, p], { className: 'm-line' }).addTo(map);
-  if (runCount === 1) fitAll();
+  if (isFar(p)) {                          // 遠いとき: 線は引かず、推定位置を地図の中心に表示する
+    if (currentLine) { map.removeLayer(currentLine); currentLine = null; }
+    map.setView(p, 5, { animate: false });
+  } else {
+    trail.addLatLng(p);
+    if (currentLine) currentLine.setLatLngs([observer, p]);
+    else currentLine = L.polyline([observer, p], { className: 'm-line' }).addTo(map);
+    if (runCount === 1) fitAll();
+  }
   if ($('bottom').classList.contains('show-result')) refreshResult();
   $('info').textContent = `連続計測中 ${runCount}/${MAX_DATA} (${mm} / 05:00)\n最新 #${r.n}: ${fix.lat.toFixed(6)}, ${fix.lon.toFixed(6)}(地表 ${fmtKm(fix.groundKm)} km)`;
 }
@@ -497,7 +504,6 @@ $('clear').addEventListener('click', () => {
   if (currentLine) map.removeLayer(currentLine);
   meteorMarkers = []; historyPoints = []; currentLine = null; maxGroundKm = 0;
   records = []; store('records', records);
-  map.setMinZoom(5);   // 履歴を消したら、縮小の制限を元に戻す
   if ($('bottom').classList.contains('show-result')) refreshResult();
 });
 
