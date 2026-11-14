@@ -50,6 +50,13 @@
   [hidden] { display:none !important; }
   #row1 button { flex:1 1 auto; white-space:nowrap; }
   #dbg { font-size:11px; color:var(--dim); }
+  #notice { position:fixed; inset:0; z-index:3200; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.55); }
+  #notice .box { width:min(76vw,280px); padding:18px 16px 14px; text-align:center; background:var(--bg); color:var(--fg);
+                 border:1px solid var(--line); border-radius:12px; box-shadow:0 6px 20px rgba(0,0,0,.5); }
+  #notice p { margin:0 0 14px; font-size:15px; line-height:1.6; }
+  #notice button { min-width:96px; padding:10px 20px; font-size:15px; border-radius:8px; border:1px solid var(--fg);
+                   background:var(--panel); color:var(--fg); }
+  body.night #notice { background:rgba(0,0,0,.7); } body.night #notice .box { box-shadow:none; }
   #hlist { position:fixed; z-index:3500; min-width:150px; background:var(--bg); border:1px solid var(--line);
            border-radius:8px; overflow:hidden; box-shadow:0 4px 14px rgba(0,0,0,.45); }
   #hlist button { display:block; width:100%; text-align:left; padding:12px 14px; font-size:15px; border:0;
@@ -142,6 +149,13 @@
   <button type="button" data-km="100">流星 100km</button>
   <button type="button" data-km="400">ISS 400km</button>
   <button type="button" data-km="380000">月 380000km</button>
+</div>
+
+<div id="notice" hidden role="dialog" aria-modal="true" aria-label="お知らせ">
+  <div class="box">
+    <p>地図上で長押しして観測地を設定します</p>
+    <button id="noticeOk" type="button">OK</button>
+  </div>
 </div>
 
 <div id="start">
@@ -309,7 +323,11 @@ function onOriIOS(e) {
   if (!iosCal) { $('dir').textContent = '方位 --°\n方位を合わせています…'; return; }
   applyOrientation(e.alpha + off, e.beta);
 }
-function closeStart() { $('start').hidden = true; store('device', device); }
+function closeStart() {
+  $('start').hidden = true; store('device', device);
+  if (!observer) { $('notice').hidden = false; $('noticeOk').focus(); }   // 観測地が未設定のときだけ、案内を出す
+}
+$('noticeOk').addEventListener('click', () => { $('notice').hidden = true; });
 $('startAndroid').addEventListener('click', () => {
   if (!('ondeviceorientationabsolute' in window)) {
     $('startMsg').textContent = 'このブラウザでは Android 用の方位が取得できません。\nChrome で開くか、iPhone を選んでください。';
